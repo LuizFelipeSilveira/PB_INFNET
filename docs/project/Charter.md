@@ -83,13 +83,21 @@ estar no ar. `src/llm_prep.py` consolida notícias, tabela oficial e texto de re
 corpus (`data/processed/corpus_llm.jsonl`) que será a entrada das técnicas de LLM da próxima etapa.
 
 ### Decisão sobre scraping dinâmico (Selenium)
-O log de coleta (`data/raw/log_coleta_iqar.csv`) mostrou que a página da CETESB retornava **0
-tabelas** extraídas só com `requests` + BeautifulSoup — sinal de conteúdo montado no navegador.
-Em vez de adotar Selenium para todas as fontes (o que contraria a recomendação de manter a
-simplicidade quando possível), `scripts/scraping/scrape_iqar.py` passou a renderizar só essa fonte
-com um Chrome headless (Selenium + `webdriver-manager`), listada em `FONTES_DINAMICAS`; a
-Wikipédia continua sendo lida da forma simples, com `requests`. Se o Chrome/driver não estiver
-disponível no ambiente, o script cai de volta para `requests` automaticamente.
+O log de coleta (`data/raw/log_coleta_iqar.csv`) mostrou, desde a primeira versão, que a página
+da CETESB retornava **0 tabelas** extraídas só com `requests` + BeautifulSoup. A hipótese inicial
+era que o conteúdo fosse montado via JavaScript, então `scripts/scraping/scrape_iqar.py` passou a
+renderizar essa fonte com um Chrome headless (Selenium + `webdriver-manager`, listada em
+`FONTES_DINAMICAS`) antes de extrair as tabelas.
+
+Testado com internet de verdade, o resultado continuou **0 tabelas mesmo com Selenium** — ou seja,
+a hipótese de "precisa de JavaScript" não se confirmou. A explicação mais provável é que a página
+simplesmente não apresenta os padrões de qualidade do ar num elemento `<table>` (podem estar em
+cards/`<div>`, numa imagem ou num PDF linkado). Por isso, essa fonte segue documentada como
+candidata, mas a referência oficial confiável do projeto continua sendo a tabela já codificada em
+`src/iqar.py` (a partir da Resolução CONAMA 491/2018), somada ao scraping da Wikipédia, que
+funciona normalmente com `requests`. Para obter a página da CETESB de fato, o próximo passo seria
+inspecionar sua estrutura HTML real (`exibir código-fonte` no navegador) e adaptar
+`extrair_tabelas` ao formato correto, em vez de seguir assumindo que é `<table>`.
 
 ## 7. Cronograma
 
