@@ -1,0 +1,16 @@
+streamlit>=1.45
+pandas>=2.0
+requests>=2.31
+beautifulsoup4>=4.12
+lxml>=5.0
+wordcloud>=1.9
+matplotlib>=3.8
+
+# API (TP3)
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.7
+
+# Scraping dinâmico opcional (TP3) — ver docs/project/Charter.md, seção 6
+selenium>=4.20
+webdriver-manager>=4.0

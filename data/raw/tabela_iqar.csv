@@ -1,0 +1,31 @@
+poluente,nome,unidade,categoria,indice_min,indice_max,conc_min,conc_max,recomendacao
+MP10,Material Particulado (MP10),µg/m³,Boa,0,40,0,50.0,Ar limpo. Aproveite para atividades ao ar livre sem restrições.
+MP10,Material Particulado (MP10),µg/m³,Moderada,41,80,50,100.0,"Pessoas de grupos sensíveis (crianças, idosos e quem tem doenças respiratórias ou cardíacas) podem sentir tosse seca e cansaço. Para a população em geral, atividades externas seguem liberadas."
+MP10,Material Particulado (MP10),µg/m³,Ruim,81,120,100,150.0,"Toda a população pode sentir tosse, ardor nos olhos, nariz e garganta. Grupos sensíveis devem reduzir esforço físico ao ar livre."
+MP10,Material Particulado (MP10),µg/m³,Muito Ruim,121,200,150,250.0,Aumento dos sintomas e falta de ar. Evite exercícios ao ar livre; grupos sensíveis devem permanecer em ambientes internos.
+MP10,Material Particulado (MP10),µg/m³,Péssima,201,400,250,,Risco sério à saúde de toda a população. Evite sair de casa e qualquer esforço físico ao ar livre.
+MP2.5,Material Particulado (MP2.5),µg/m³,Boa,0,40,0,25.0,Ar limpo. Aproveite para atividades ao ar livre sem restrições.
+MP2.5,Material Particulado (MP2.5),µg/m³,Moderada,41,80,25,50.0,"Pessoas de grupos sensíveis (crianças, idosos e quem tem doenças respiratórias ou cardíacas) podem sentir tosse seca e cansaço. Para a população em geral, atividades externas seguem liberadas."
+MP2.5,Material Particulado (MP2.5),µg/m³,Ruim,81,120,50,75.0,"Toda a população pode sentir tosse, ardor nos olhos, nariz e garganta. Grupos sensíveis devem reduzir esforço físico ao ar livre."
+MP2.5,Material Particulado (MP2.5),µg/m³,Muito Ruim,121,200,75,125.0,Aumento dos sintomas e falta de ar. Evite exercícios ao ar livre; grupos sensíveis devem permanecer em ambientes internos.
+MP2.5,Material Particulado (MP2.5),µg/m³,Péssima,201,400,125,,Risco sério à saúde de toda a população. Evite sair de casa e qualquer esforço físico ao ar livre.
+O3,Ozônio (O3),µg/m³,Boa,0,40,0,100.0,Ar limpo. Aproveite para atividades ao ar livre sem restrições.
+O3,Ozônio (O3),µg/m³,Moderada,41,80,100,130.0,"Pessoas de grupos sensíveis (crianças, idosos e quem tem doenças respiratórias ou cardíacas) podem sentir tosse seca e cansaço. Para a população em geral, atividades externas seguem liberadas."
+O3,Ozônio (O3),µg/m³,Ruim,81,120,130,160.0,"Toda a população pode sentir tosse, ardor nos olhos, nariz e garganta. Grupos sensíveis devem reduzir esforço físico ao ar livre."
+O3,Ozônio (O3),µg/m³,Muito Ruim,121,200,160,200.0,Aumento dos sintomas e falta de ar. Evite exercícios ao ar livre; grupos sensíveis devem permanecer em ambientes internos.
+O3,Ozônio (O3),µg/m³,Péssima,201,400,200,,Risco sério à saúde de toda a população. Evite sair de casa e qualquer esforço físico ao ar livre.
+CO,Monóxido de Carbono (CO),ppm,Boa,0,40,0,9.0,Ar limpo. Aproveite para atividades ao ar livre sem restrições.
+CO,Monóxido de Carbono (CO),ppm,Moderada,41,80,9,11.0,"Pessoas de grupos sensíveis (crianças, idosos e quem tem doenças respiratórias ou cardíacas) podem sentir tosse seca e cansaço. Para a população em geral, atividades externas seguem liberadas."
+CO,Monóxido de Carbono (CO),ppm,Ruim,81,120,11,13.0,"Toda a população pode sentir tosse, ardor nos olhos, nariz e garganta. Grupos sensíveis devem reduzir esforço físico ao ar livre."
+CO,Monóxido de Carbono (CO),ppm,Muito Ruim,121,200,13,15.0,Aumento dos sintomas e falta de ar. Evite exercícios ao ar livre; grupos sensíveis devem permanecer em ambientes internos.
+CO,Monóxido de Carbono (CO),ppm,Péssima,201,400,15,,Risco sério à saúde de toda a população. Evite sair de casa e qualquer esforço físico ao ar livre.
+NO2,Dióxido de Nitrogênio (NO2),µg/m³,Boa,0,40,0,200.0,Ar limpo. Aproveite para atividades ao ar livre sem restrições.
+NO2,Dióxido de Nitrogênio (NO2),µg/m³,Moderada,41,80,200,240.0,"Pessoas de grupos sensíveis (crianças, idosos e quem tem doenças respiratórias ou cardíacas) podem sentir tosse seca e cansaço. Para a população em geral, atividades externas seguem liberadas."
+NO2,Dióxido de Nitrogênio (NO2),µg/m³,Ruim,81,120,240,320.0,"Toda a população pode sentir tosse, ardor nos olhos, nariz e garganta. Grupos sensíveis devem reduzir esforço físico ao ar livre."
+NO2,Dióxido de Nitrogênio (NO2),µg/m³,Muito Ruim,121,200,320,1130.0,Aumento dos sintomas e falta de ar. Evite exercícios ao ar livre; grupos sensíveis devem permanecer em ambientes internos.
+NO2,Dióxido de Nitrogênio (NO2),µg/m³,Péssima,201,400,1130,,Risco sério à saúde de toda a população. Evite sair de casa e qualquer esforço físico ao ar livre.
+SO2,Dióxido de Enxofre (SO2),µg/m³,Boa,0,40,0,20.0,Ar limpo. Aproveite para atividades ao ar livre sem restrições.
+SO2,Dióxido de Enxofre (SO2),µg/m³,Moderada,41,80,20,40.0,"Pessoas de grupos sensíveis (crianças, idosos e quem tem doenças respiratórias ou cardíacas) podem sentir tosse seca e cansaço. Para a população em geral, atividades externas seguem liberadas."
+SO2,Dióxido de Enxofre (SO2),µg/m³,Ruim,81,120,40,365.0,"Toda a população pode sentir tosse, ardor nos olhos, nariz e garganta. Grupos sensíveis devem reduzir esforço físico ao ar livre."
+SO2,Dióxido de Enxofre (SO2),µg/m³,Muito Ruim,121,200,365,800.0,Aumento dos sintomas e falta de ar. Evite exercícios ao ar livre; grupos sensíveis devem permanecer em ambientes internos.
+SO2,Dióxido de Enxofre (SO2),µg/m³,Péssima,201,400,800,,Risco sério à saúde de toda a população. Evite sair de casa e qualquer esforço físico ao ar livre.
