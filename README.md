@@ -73,17 +73,6 @@ uvicorn api.main:app --reload
 Documentação interativa (Swagger) em http://127.0.0.1:8000/docs. A aba **API & IA** do app tem um
 mini-formulário para testar as rotas sem sair do Streamlit (basta a API estar rodando).
 
-## Controle de versão com Git
-
-```bash
-git init
-git add .
-git commit -m "feat: estrutura TDSP, scrapers e interface interativa"
-git branch -M main
-git remote add origin https://github.com/SEU_USUARIO/eter.git
-git push -u origin main
-```
-
 Sugestão de fluxo: uma branch por funcionalidade (`git checkout -b feat/upload-csv`), commits
 pequenos com prefixos (`feat:`, `fix:`, `docs:`, `data:`) e merge na `main` via pull request.
 O `.gitignore` já impede que `secrets.toml` seja enviado.
