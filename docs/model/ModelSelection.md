@@ -258,33 +258,53 @@ A partir dos erros da rodada 2:
   concentração, como na rodada 2. As faixas do índice entram num bloco separado e só quando a
   pergunta é sobre o índice.
 
-### Rodada 4: contexto de Q&A corrigido (a preencher)
+### Rodada 4: contexto de Q&A corrigido
 
-| Modelo | Formato | Tokens/s | Acerto sentimento (12) | Acerto Q&A (3) |
-|---|---|---|---|---|
-| Qwen3.5-0.8B | FP16 | | | |
+| Modelo | Formato | Carga (s) | Tokens/s | VRAM de pico (GB) | Acerto sentimento (12) | Acerto Q&A (3) |
+|---|---|---|---|---|---|---|
+| Qwen3.5-0.8B | FP16 | 11,8 | 11,5 | 1,46 | 0,92 (11/12) | **1,00** (3/3) |
+
+A correção resolveu o problema: o 0,8B voltou a acertar todas as perguntas e manteve o
+desempenho em sentimento. O único erro restante é uma manchete neutra ("Cetesb divulga boletim
+diário") classificada como positiva. O 2B não foi reavaliado nesta rodada, porque o *prompt* de
+sentimento não mudou e o formato novo de Q&A é o mesmo que ele já acertava na rodada 2.
+
+### Resumo da evolução
+
+| Rodada | Mudança | 0,8B sentimento | 0,8B Q&A | 2B sentimento | 2B Q&A |
+|---|---|---|---|---|---|
+| 1 (CPU) | linha de base | 0,67 | 1,00 | 0,67 | 1,00 |
+| 2 (GPU) | GPU habilitada | 0,67 | 1,00 | 0,67 | 1,00 |
+| 3 | *prompt* de sentimento com definições e exemplos; 12 frases; *prompts* da API | 0,92 | 0,33 | 1,00 | 1,00 |
+| 4 | contexto de Q&A só com concentrações | 0,92 | 1,00 | — | — |
 
 ## 7. Decisão
 
 **Modelo escolhido: `Qwen/Qwen3.5-0.8B`, em FP16, rodando na GTX 1050 Ti.**
 
 A análise teórica (seções 3 e 4.1) apontava o Qwen3.5-2B, que tem os melhores *benchmarks*. A
-avaliação local mudou a decisão:
+avaliação local, em quatro rodadas, mudou a decisão:
 
-- **Desempenho:** nas tarefas do Éter, o 0,8B **empatou** com o 2B em sentimento e Q&A (rodadas
-  1 e 2). Nos textos livres, foi menos fluente, mas não errou fatos, enquanto o 2B inverteu uma
-  causa no resumo. A vantagem do 2B nos *benchmarks* (conhecimento geral, raciocínio) quase não
-  aparece em tarefas curtas e com contexto fornecido no *prompt*, que são as do app.
-- **Custo computacional local:** 1,5 GB de VRAM, carga em 7 s e **11,6 tokens/s**, contra
-  3,1 tokens/s do 2B. Para quem usa o app, é a diferença entre esperar 10 s e 40 s por um
+- **Desempenho:** com os *prompts* finais, o 0,8B acerta **92% em sentimento** (11 de 12) e
+  **100% em perguntas** sobre a tabela. O 2B acerta 100% e 100%, ou seja, uma manchete a mais
+  em 12. Nos textos livres, o 0,8B é menos fluente, mas não errou fatos, enquanto o 2B
+  inverteu uma causa no resumo (rodada 2). A vantagem do 2B nos *benchmarks* quase não aparece
+  nas tarefas do app, que são curtas e trazem o contexto no *prompt*.
+- **Custo computacional local:** 1,5 GB de VRAM, carga em ~12 s e **11,5 tokens/s**, contra
+  3,0 tokens/s do 2B. Para quem usa o app, é a diferença entre esperar ~10 s e ~40 s por um
   resumo. Por caber inteiro em FP16, dispensa a quantização, que nesta placa custa caro.
 - **Acessibilidade:** mesma família, licença (Apache 2.0) e forma de carga do 2B; download de
   ~2 GB; roda também em máquinas sem GPU (3,2 tokens/s na CPU, rodada 1).
 
+**Lição da avaliação:** o *prompt* pesou tanto quanto o tamanho do modelo. As duas melhorias
+(definir os rótulos de sentimento e não misturar números do índice com concentrações) levaram
+o 0,8B de 67% para 92% em sentimento e de 33% de volta a 100% em perguntas, sem trocar de
+modelo.
+
 **Alternativa configurável:** o `Qwen/Qwen3.5-2B` em 4 bits continua suportado
-(`ETER_LLM_MODELO`, seção 9). Ele faz sentido para gerar textos fora do fluxo interativo, como
-boletins pré-gerados, onde a espera não incomoda. O `Qwen/Qwen3-1.7B` foi descartado: tem a
-mesma velocidade do 2B e não supera nenhum dos dois.
+(`ETER_LLM_MODELO`, seção 9). Ele faz sentido quando a precisão máxima importa mais que a
+espera, por exemplo para gerar boletins fora do fluxo interativo. O `Qwen/Qwen3-1.7B` foi
+descartado: tem a mesma velocidade do 2B e não supera nenhum dos dois.
 
 ## 8. Integração com a API (FastAPI)
 
