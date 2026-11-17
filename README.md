@@ -109,6 +109,38 @@ curl -X POST http://127.0.0.1:8000/processar_texto -H "Content-Type: application
 
 No app, a aba **API & IA → LLM local** faz o mesmo com um formulário. Testes: `pytest -q`.
 
+### Formato das respostas e dos erros
+
+Todas as rotas declaram um `response_model` (em `api/schemas.py`), e o FastAPI valida cada
+resposta antes de enviá-la. Exemplo de resposta de `POST /processar_texto`:
+
+```json
+{
+  "tarefa": "sentimento",
+  "texto_entrada": "Fumaça deixa o ar de Manaus péssimo",
+  "analise": {"tipo": "sentimento", "rotulo": "negativo", "rotulo_valido": true,
+              "resposta_modelo": "negativo"},
+  "metadados": {"modelo": "Qwen/Qwen3.5-0.8B", "formato": "fp16-gpu", "tokens_gerados": 2,
+                "tempo_s": 0.4, "processado_em": "2026-11-16T21:30:00"}
+}
+```
+
+O conteúdo de `analise` depende de `analise.tipo`:
+- `resumo`: traz `resumo`, `palavras_entrada`, `palavras_resumo` e `taxa_compressao`;
+- `sentimento`: traz `rotulo`, `rotulo_valido` e `resposta_modelo`;
+- `pergunta`: traz `resposta`, `poluentes_consultados` e `fonte`.
+
+Todos os erros seguem um único formato, `{"status", "erro", "mensagem", "campos"}`, com
+mensagens em português. Os códigos de `erro` são:
+
+| Status | `erro` | Quando |
+|---|---|---|
+| 400 | `requisicao_invalida` | ex.: poluente inexistente em `/iqar/calcular` |
+| 404 | `nao_encontrado` | rota ou dado inexistente |
+| 422 | `entrada_invalida` | campo ausente, fora dos limites ou desconhecido (lista em `campos`) |
+| 502 | `resposta_invalida_do_modelo` | o LLM devolveu algo fora do contrato (ex.: resumo vazio) |
+| 503 | `llm_indisponivel` | PyTorch/Transformers não instalados ou modelo não baixado |
+
 ## Deploy (Streamlit Community Cloud)
 
 1. Envie o repositório ao GitHub.

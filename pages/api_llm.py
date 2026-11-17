@@ -104,18 +104,33 @@ with aba_local:
             except requests.RequestException as erro:
                 st.error(f"Não foi possível falar com a API em {url_llm} ({erro}). Ela está rodando?")
             else:
+                dados = resp.json()
                 if resp.ok:
-                    dados = resp.json()
-                    if dados.get("sentimento"):
+                    analise, meta = dados["analise"], dados["metadados"]
+                    if analise["tipo"] == "sentimento":
                         icones = {"positivo": "🟢", "negativo": "🔴", "neutro": "⚪"}
-                        st.metric("Sentimento", f"{icones[dados['sentimento']]} {dados['sentimento']}")
-                    st.success(dados["resultado"])
-                    st.caption(f"{dados['modelo']} · {dados['formato']} · "
-                               f"{dados['tokens_gerados']} tokens em {dados['tempo_s']} s")
-                elif resp.status_code == 422:
-                    st.warning("O texto precisa ter entre 3 e 4.000 caracteres.")
+                        if analise["rotulo_valido"]:
+                            st.metric("Sentimento", f"{icones[analise['rotulo']]} {analise['rotulo']}")
+                        else:
+                            st.warning("O modelo não devolveu um rótulo válido: "
+                                       f"“{analise['resposta_modelo']}”")
+                    elif analise["tipo"] == "resumo":
+                        st.success(analise["resumo"])
+                        st.caption(f"{analise['palavras_entrada']} → {analise['palavras_resumo']} "
+                                   f"palavras (taxa de compressão {analise['taxa_compressao']:.0%})")
+                    else:
+                        st.success(analise["resposta"])
+                        st.caption("Contexto consultado: tabela IQAr de "
+                                   + ", ".join(analise["poluentes_consultados"]))
+                    st.caption(f"{meta['modelo']} · {meta['formato']} · "
+                               f"{meta['tokens_gerados']} tokens em {meta['tempo_s']} s")
+                    with st.expander("Ver o JSON completo devolvido pela API"):
+                        st.json(dados)
                 else:
-                    st.error(resp.json().get("detail", resp.text))
+                    # Todos os erros da API vêm no formato ErroAPI: {status, erro, mensagem, campos}
+                    st.error(f"**{dados.get('erro', 'erro')}** — {dados.get('mensagem', resp.text)}")
+                    for campo in dados.get("campos", []):
+                        st.caption(f"• `{campo['campo']}`: {campo['mensagem']}")
 
 # ---------------------------------------------------------------- LLM prep
 with aba_llm:

@@ -123,20 +123,30 @@ def gerar(tokenizer, modelo, prompt: str, max_tokens: int = 160,
 
 
 # ---------------------------------------------------------------- tarefas do app
-def _contexto_iqar(pergunta: str) -> str:
-    """Trechos da tabela oficial para a tarefa 'pergunta' (só os poluentes citados, se houver)."""
+def poluentes_citados(pergunta: str) -> list[str]:
+    """Siglas da tabela citadas na pergunta ("pm 2,5" conta como MP2.5)."""
+    from src import data_loader as dl
+
+    # A busca exige a sigla isolada: "CO" não casa com "COMO" nem com "CO2".
+    norm = re.sub(r"(\d),(\d)", r"\1.\2", dl.normalizar_poluente(pergunta).replace("MP ", "MP"))
+    return [p for p in ("MP10", "MP2.5", "O3", "CO", "NO2", "SO2")
+            if re.search(rf"(?<![A-Z0-9]){re.escape(p)}(?![A-Z0-9]|\.\d)", norm)]
+
+
+def contexto_iqar(pergunta: str) -> tuple[str, list[str]]:
+    """Trechos da tabela oficial para a tarefa 'pergunta'.
+
+    Devolve (texto do contexto, poluentes incluídos). Usa só os poluentes citados;
+    se nenhum for citado, envia a tabela inteira.
+    """
     import pandas as pd
 
     from src import data_loader as dl
 
     tabela = dl.ler_csv(dl.ARQ_IQAR)
     if tabela is None:
-        return ""
-    # "pm 2,5" -> "MP2.5"; a busca exige a sigla isolada ("CO" não casa com "COMO" nem "CO2")
-    pergunta_norm = re.sub(r"(\d),(\d)", r"\1.\2",
-                           dl.normalizar_poluente(pergunta).replace("MP ", "MP"))
-    citados = [p for p in tabela["poluente"].unique()
-               if re.search(rf"(?<![A-Z0-9]){re.escape(p)}(?![A-Z0-9]|\.\d)", pergunta_norm)]
+        return "", []
+    citados = poluentes_citados(pergunta)
     if citados:
         tabela = tabela[tabela["poluente"].isin(citados)]
     linhas = []
@@ -145,7 +155,7 @@ def _contexto_iqar(pergunta: str) -> str:
                  else f"acima de {r.conc_min:g}")
         linhas.append(f"- {r.poluente}, {r.categoria} (índice {r.indice_min}–{r.indice_max}): "
                       f"{faixa} {r.unidade}")
-    return "\n".join(linhas)
+    return "\n".join(linhas), list(dict.fromkeys(tabela["poluente"]))
 
 
 # A definição de cada rótulo e os exemplos corrigem o erro mais comum dos modelos
@@ -174,7 +184,7 @@ def montar_prompt(tarefa: str, texto: str) -> tuple[str, int]:
     if tarefa == "pergunta":
         return ("Responda à pergunta usando somente a tabela oficial do IQAr abaixo. Se a "
                 "resposta não estiver na tabela, diga que não sabe.\n\n"
-                f"Tabela:\n{_contexto_iqar(texto)}\n\nPergunta: {texto}", 150)
+                f"Tabela:\n{contexto_iqar(texto)[0]}\n\nPergunta: {texto}", 150)
     raise ValueError(f"Tarefa desconhecida: {tarefa}")
 
 
@@ -216,6 +226,6 @@ class LLMLocal:
         with self._cadeado:
             self._garantir_carregado()
             resposta, n_tokens, segundos = gerar(self._tokenizer, self._modelo, prompt, max_tokens)
-        return {"resultado": resposta,
-                "sentimento": rotulo_sentimento(resposta) if tarefa == "sentimento" else None,
-                "tokens_gerados": n_tokens, "tempo_s": round(segundos, 2)}
+        # Saída "crua": quem chama (a API) interpreta e valida conforme a tarefa.
+        return {"resultado": resposta, "tokens_gerados": n_tokens,
+                "tempo_s": round(segundos, 2)}

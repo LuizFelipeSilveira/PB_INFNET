@@ -230,7 +230,7 @@ O 2B escreve melhor, mas foi o único a errar um fato. Para um app de saúde, fi
 conteúdo pesa mais que estilo. Em qualidade, os dois ficam próximos, cada um com um tipo de
 falha.
 
-### Rodada 3: *prompt* de sentimento revisado (a preencher)
+### Rodada 3: *prompt* de sentimento revisado
 
 A partir dos erros da rodada 2:
 
@@ -241,10 +241,18 @@ A partir dos erros da rodada 2:
 - **Avaliação = API:** o script agora usa exatamente os mesmos *prompts* da rota
   `POST /processar_texto`, então mede o que o app de fato entrega.
 
-| Modelo | Formato | Tokens/s | Acerto sentimento (12) | Acerto Q&A (3) |
-|---|---|---|---|---|
-| Qwen3.5-0.8B | FP16 | | | |
-| Qwen3.5-2B | NF4 4 bits | | | |
+| Modelo | Formato | Carga (s) | Tokens/s | VRAM de pico (GB) | Acerto sentimento (12) | Acerto Q&A (3) |
+|---|---|---|---|---|---|---|
+| Qwen3.5-0.8B | FP16 | 14,2 | 11,1 | 1,47 | **0,92** (11/12) | **0,33** (1/3) |
+| Qwen3.5-2B | NF4 4 bits | 18,6 | 3,0 | 1,74 | **1,00** (12/12) | 1,00 (3/3) |
+
+- **Sentimento:** o *prompt* com definições e exemplos resolveu o problema das manchetes
+  neutras. O 0,8B subiu de 67% para 92% e o 2B acertou todas, num conjunto de teste duas vezes
+  maior.
+- **Q&A:** o 0,8B caiu de 100% para 33%. A única mudança nessa tarefa foi o *prompt*, que
+  passou a ser o mesmo da API e acrescenta as faixas do índice ("índice 41–80") ao lado das
+  faixas de concentração. *Diagnóstico em andamento:* a hipótese é que o modelo menor confunde
+  os dois conjuntos de números. O 2B não teve esse problema.
 
 ## 7. Decisão
 
