@@ -1,3 +1,4 @@
 fonte,url,status,tabelas,motor,coletado_em
-cetesb,https://cetesb.sp.gov.br/ar/padroes-de-qualidade-do-ar/,ok,0,selenium,2026-10-19T15:10:13
-wikipedia,https://pt.wikipedia.org/wiki/%C3%8Dndice_de_qualidade_do_ar,ok,1,requests,2026-10-19T15:10:13
+cetesb,https://cetesb.sp.gov.br/ar/padroes-de-qualidade-do-ar/,ok,0,selenium,2026-11-16T22:16:51
+wikipedia,https://pt.wikipedia.org/wiki/%C3%8Dndice_de_qualidade_do_ar,ok,1,requests,2026-11-16T22:16:51
+mma,https://www.gov.br/mma/pt-br/assuntos/meio-ambiente-urbano-recursos-hidricos-qualidade-ambiental/qualidade-do-ar/indice-de-qualidade-do-ar-iqar/orientacao-tecnica-indice-de-qualidade-do-ar-jan-25.pdf,ok,1,requests+pdfplumber,2026-11-16T22:16:51
