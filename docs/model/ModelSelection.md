@@ -46,8 +46,8 @@ contexto CUDA (~0,3 GB) e o que o Windows já usa da placa para a tela.
 
 | Modelo | Parâmetros | Licença | Memória estimada | Situação |
 |---|---|---|---|---|
-| **Qwen3.5-2B** | 2B | Apache 2.0 | ~4 GB em FP16; **~2 GB em 4 bits** | **Escolhido (em 4 bits)** |
-| Qwen3.5-0.8B | 0,8B | Apache 2.0 | ~1,6 GB em FP16 | Plano B (mais leve e rápido, menos preciso) |
+| **Qwen3.5-0.8B** | 0,8B | Apache 2.0 | **~1,6 GB em FP16** | **Escolhido (FP16), após a avaliação local** |
+| Qwen3.5-2B | 2B | Apache 2.0 | ~4 GB em FP16; ~2 GB em 4 bits | Finalista: mais fluente, mas 3,7× mais lento na placa (seção 6) |
 | Qwen3-1.7B | 1,7B | Apache 2.0 | ~1,4 GB em 4 bits | Comparação (geração anterior) |
 | Qwen3.5-4B | 4B | Apache 2.0 | ~3 GB em 4 bits | Descartado: sem folga nos 4 GB |
 | Gemma 4 E2B | 2,3B efetivos (5,1B com *embeddings*) | Apache 2.0 | acima de 4 GB | Descartado: os *embeddings* sozinhos já ocupam a placa |
@@ -78,8 +78,9 @@ Leitura dos números:
 - O **Qwen3-1.7B** segue melhor instruções de formato (IFEval) no modo sem raciocínio. Para o
   Éter isso importa na classificação ("responda com uma palavra"). Esse ponto é conferido na
   avaliação local (seção 6), em vez de decidido só pelo benchmark.
-- O **Qwen3.5-0.8B** fica bem abaixo nos dois casos. Serve de plano B, se a velocidade for mais
-  importante que a qualidade.
+- O **Qwen3.5-0.8B** fica bem abaixo nos *benchmarks*. Mesmo assim, entra na avaliação local por
+  ser o único finalista que cabe inteiro na placa sem quantização. A seção 6 mostra que isso
+  pesa mais do que os *benchmarks* sugerem.
 - O Qwen3.5-2B trabalha **sem modo de raciocínio por padrão**. Isso é adequado ao app: as
   respostas são diretas, mais curtas e mais rápidas.
 
@@ -103,6 +104,10 @@ A GTX 1050 Ti define o teto. Quatro pontos guiaram a escolha:
    (`flash-linear-attention`, `causal-conv1d`, baseadas em Triton) que não costumam funcionar
    no Windows nem em placas antigas. Sem elas, o Transformers usa automaticamente uma
    implementação em PyTorch puro. Funciona, mas fica mais lento que numa placa recente.
+5. **4 bits economizam memória, não tempo:** a avaliação (seção 6) mostrou que, na 1050 Ti, o
+   modelo em 4 bits é bem mais lento que um modelo menor em FP16. A cada token gerado, os pesos
+   precisam ser descompactados, e placas antigas não têm instruções dedicadas para isso. Por
+   isso, na GPU, o projeto usa FP16 sempre que o modelo cabe inteiro na memória.
 
 Alternativa sem GPU: todos os candidatos também rodam na CPU (`--cpu` no script de
 avaliação), em float32. Isso exige ~8 GB de RAM livres para o modelo de 2B e é bem mais lento.
@@ -111,12 +116,12 @@ avaliação), em float32. Isso exige ~8 GB de RAM livres para o modelo de 2B e �
 
 | Requisito | Qwen3.5-2B |
 |---|---|
-| Disponível no Hugging Face Hub | Sim: `Qwen/Qwen3.5-2B` |
+| Disponível no Hugging Face Hub | Sim: `Qwen/Qwen3.5-0.8B` (e `Qwen/Qwen3.5-2B`) |
 | Precisa de login ou aceite de termos | Não |
 | Licença | Apache 2.0 (permite uso acadêmico e comercial) |
 | Carrega com Transformers | Sim: `AutoModelForCausalLM` carrega só a parte de texto (o modelo também aceita imagens, o que o Éter não usa) |
 | Funciona offline | Sim, depois do primeiro download (fica no cache `~/.cache/huggingface`) |
-| Tamanho do download | ~4–5 GB (pesos completos; a quantização é feita na carga) |
+| Tamanho do download | ~2 GB para o 0,8B; ~4–5 GB para o 2B (a quantização, quando usada, é feita na carga) |
 
 ## 5. Instalação passo a passo (Windows + GTX 1050 Ti)
 
@@ -142,7 +147,7 @@ python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_
 pip install -r requirements-llm.txt
 pip install -r requirements.txt
 
-# 6. Baixe o modelo para a pasta modelos/ (uma vez só, ~4–5 GB)
+# 6. Baixe o modelo para a pasta modelos/ (uma vez só, ~2 GB)
 python scripts/llm/baixar_modelo.py
 ```
 
@@ -192,33 +197,76 @@ Leitura:
   cerca de 40 s no 0,8B e cerca de 85 s no 2B.
 - **Qwen3-1.7B:** é mais lento e usa mais memória que o 0,8B, e acertou menos. Fica descartado.
 
-### Rodada 2: GPU (GTX 1050 Ti, NF4 4 bits)
+### Rodada 2: GPU (GTX 1050 Ti)
 
-*A preencher depois de reinstalar o PyTorch na variante `cu126` (seção 5).*
+Depois de reinstalar o PyTorch na variante `cu126`:
 
 | Modelo | Formato | Carga (s) | Tokens/s | VRAM de pico (GB) | Acerto sentimento | Acerto Q&A |
 |---|---|---|---|---|---|---|
-| Qwen3.5-2B | NF4 4 bits | | | | | |
-| Qwen3.5-0.8B | FP16 | | | | | |
-| Qwen3-1.7B | NF4 4 bits | | | | | |
+| Qwen3.5-2B | NF4 4 bits | 27,4 | 3,1 | 1,73 | 0,67 (4/6) | 1,00 (3/3) |
+| **Qwen3.5-0.8B** | **FP16** | **6,7** | **11,6** | 1,46 | 0,67 (4/6) | 1,00 (3/3) |
+| Qwen3-1.7B | NF4 4 bits | 16,8 | 3,1 | 2,20 | 0,67 (4/6) | 1,00 (3/3) |
 
-Avaliação manual do resumo e do boletim (arquivos `<modelo>.json`): *a preencher.*
+- **Memória:** os três couberam com folga nos 4 GB (pico de 2,2 GB).
+- **Velocidade:** o 0,8B em FP16 foi **3,7 vezes mais rápido** que o 2B em 4 bits e carregou
+  4 vezes mais rápido. Um resumo de 120 tokens leva cerca de 10 s no 0,8B e 40 s no 2B
+  (ver o item 5 da seção 4.2).
+- **Acerto:** empate nas tarefas com gabarito.
+
+**Análise dos erros de sentimento:** os dois Qwen3.5 erraram exatamente as duas manchetes
+neutras. O 2B classificou ambas como positivas. O 0,8B classificou uma como negativa e a outra
+como positiva. O *prompt* não definia o que é "neutro", e os modelos tendem a dar um rótulo
+emocional a qualquer notícia sobre poluição. Uma das frases de teste ("Prefeitura instala nova
+estação de monitoramento") também é ambígua e pode ser lida como positiva.
+
+**Avaliação manual dos textos livres:**
+
+| | Qwen3.5-2B | Qwen3.5-0.8B |
+|---|---|---|
+| Resumo | Fluente, mas **inverte uma causa**: diz que as chuvas provocaram a suspensão das aulas, quando na notícia a chuva *melhorou* o ar | Português travado ("redes... suspensas... estão suspendendo"), mas **fatos corretos** |
+| Boletim | Claro e curto, mas **não cumpre** o pedido de recomendação específica para quem pratica esporte | Cumpre todos os pontos pedidos. Tem deslizes de vocabulário ("ar extremamente poluente") e uma recomendação de esporte mais branda que a regra do próprio app para "Muito Ruim" |
+
+O 2B escreve melhor, mas foi o único a errar um fato. Para um app de saúde, fidelidade ao
+conteúdo pesa mais que estilo. Em qualidade, os dois ficam próximos, cada um com um tipo de
+falha.
+
+### Rodada 3: *prompt* de sentimento revisado (a preencher)
+
+A partir dos erros da rodada 2:
+
+- **Prompt (`src/llm.py`, `PROMPT_SENTIMENTO`):** agora define cada rótulo e traz três exemplos
+  (*few-shot*), um por classe, diferentes das frases de teste.
+- **Conjunto de teste:** passou de 6 para 12 frases (4 por classe). A frase ambígua foi
+  substituída. Com 12 itens, cada erro pesa 8 pontos em vez de 17.
+- **Avaliação = API:** o script agora usa exatamente os mesmos *prompts* da rota
+  `POST /processar_texto`, então mede o que o app de fato entrega.
+
+| Modelo | Formato | Tokens/s | Acerto sentimento (12) | Acerto Q&A (3) |
+|---|---|---|---|---|
+| Qwen3.5-0.8B | FP16 | | | |
+| Qwen3.5-2B | NF4 4 bits | | | |
 
 ## 7. Decisão
 
-**Modelo escolhido: `Qwen/Qwen3.5-2B`, quantizado em 4 bits (NF4) e rodando na GTX 1050 Ti.**
+**Modelo escolhido: `Qwen/Qwen3.5-0.8B`, em FP16, rodando na GTX 1050 Ti.**
 
-- **Desempenho:** é o melhor dos modelos que cabem na placa em conhecimento geral e multilíngue.
-  É do tipo certo para o projeto (decodificador com instruções) e cobre as quatro tarefas sem
-  treino adicional.
-- **Custo computacional:** com a quantização NF4, ocupa cerca de 2 GB dos 4 GB da placa.
-  Funciona na variante `cu126` do PyTorch, a única que ainda suporta a arquitetura Pascal.
-- **Acessibilidade:** download livre no Hugging Face, licença Apache 2.0, carregamento direto com
-  Transformers e execução offline.
+A análise teórica (seções 3 e 4.1) apontava o Qwen3.5-2B, que tem os melhores *benchmarks*. A
+avaliação local mudou a decisão:
 
-**Plano B, confirmado pela rodada 1:** sem GPU, o projeto usa o `Qwen/Qwen3.5-0.8B`. Na CPU,
-ele teve o mesmo acerto do 2B e foi 2,3 vezes mais rápido. A troca não exige mudar código, só a
-variável de ambiente `ETER_LLM_MODELO` (seção 9). O `Qwen/Qwen3-1.7B` foi descartado.
+- **Desempenho:** nas tarefas do Éter, o 0,8B **empatou** com o 2B em sentimento e Q&A (rodadas
+  1 e 2). Nos textos livres, foi menos fluente, mas não errou fatos, enquanto o 2B inverteu uma
+  causa no resumo. A vantagem do 2B nos *benchmarks* (conhecimento geral, raciocínio) quase não
+  aparece em tarefas curtas e com contexto fornecido no *prompt*, que são as do app.
+- **Custo computacional local:** 1,5 GB de VRAM, carga em 7 s e **11,6 tokens/s**, contra
+  3,1 tokens/s do 2B. Para quem usa o app, é a diferença entre esperar 10 s e 40 s por um
+  resumo. Por caber inteiro em FP16, dispensa a quantização, que nesta placa custa caro.
+- **Acessibilidade:** mesma família, licença (Apache 2.0) e forma de carga do 2B; download de
+  ~2 GB; roda também em máquinas sem GPU (3,2 tokens/s na CPU, rodada 1).
+
+**Alternativa configurável:** o `Qwen/Qwen3.5-2B` em 4 bits continua suportado
+(`ETER_LLM_MODELO`, seção 9). Ele faz sentido para gerar textos fora do fluxo interativo, como
+boletins pré-gerados, onde a espera não incomoda. O `Qwen/Qwen3-1.7B` foi descartado: tem a
+mesma velocidade do 2B e não supera nenhum dos dois.
 
 ## 8. Integração com a API (FastAPI)
 
@@ -253,9 +301,9 @@ Decisões de implementação:
 
 | Variável | Padrão | Uso |
 |---|---|---|
-| `ETER_LLM_MODELO` | `Qwen/Qwen3.5-2B` | troca o modelo (ex.: `Qwen/Qwen3.5-0.8B` numa máquina sem GPU) |
+| `ETER_LLM_MODELO` | `Qwen/Qwen3.5-0.8B` | troca o modelo (ex.: `Qwen/Qwen3.5-2B` para textos mais fluentes, aceitando ~40 s por resumo) |
 | `ETER_LLM_DISPOSITIVO` | `auto` | `gpu` ou `cpu` para forçar |
-| `ETER_LLM_QUANT` | `auto` | `4bit`, `fp16` ou `fp32` (auto: 4 bits na GPU, FP32 na CPU) |
+| `ETER_LLM_QUANT` | `auto` | `4bit`, `fp16` ou `fp32` (auto: FP16 na GPU para o 0,8B, 4 bits para os maiores, FP32 na CPU) |
 | `HF_HUB_OFFLINE` | (vazio) | `1` impede qualquer acesso ao Hugging Face |
 
 ## 10. Referências

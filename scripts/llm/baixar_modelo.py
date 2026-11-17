@@ -4,8 +4,8 @@ Depois do download, src/llm.py carrega o modelo direto dessa pasta, sem acessar 
 internet. A pasta modelos/ fica fora do Git (.gitignore), porque tem alguns GB.
 
 Uso, na raiz do projeto:
-    python scripts/llm/baixar_modelo.py                      # modelo padrão (Qwen/Qwen3.5-2B)
-    python scripts/llm/baixar_modelo.py Qwen/Qwen3.5-0.8B    # outro modelo
+    python scripts/llm/baixar_modelo.py                      # modelo padrão (Qwen/Qwen3.5-0.8B)
+    python scripts/llm/baixar_modelo.py Qwen/Qwen3.5-2B      # outro modelo
 """
 from __future__ import annotations
 

@@ -35,7 +35,7 @@ sys.path.append(str(RAIZ))
 import pandas as pd  # noqa: E402
 
 from src import data_loader as dl  # noqa: E402
-from src.llm import carregar, gerar, rotulo_sentimento  # noqa: E402
+from src.llm import carregar, gerar, montar_prompt, rotulo_sentimento  # noqa: E402
 
 PASTA_SAIDA = dl.DATA_RAW.parent / "processed" / "avaliacao_llm"
 
@@ -49,29 +49,36 @@ CANDIDATOS = {
 }
 
 # Frases curtas com rótulo conhecido, escritas para este teste (não vêm do scraping),
-# para medir acerto de forma objetiva.
+# 4 de cada classe. Nenhuma repete os exemplos do prompt (src/llm.py).
+# Rodada 3: a frase "Prefeitura instala nova estação de monitoramento" (neutro) saiu
+# por ser ambígua (pode ser lida como positiva) e a lista passou de 6 para 12 frases.
 SENTIMENTO = [
     ("Chuva forte limpa o ar e índice volta a ficar bom na capital", "positivo"),
-    ("Fumaça das queimadas deixa qualidade do ar péssima e escolas suspendem aulas", "negativo"),
-    ("Cetesb divulga boletim diário de qualidade do ar nesta segunda", "neutro"),
-    ("Hospitais registram alta de atendimentos respiratórios por causa da poluição", "negativo"),
     ("Nova frota de ônibus elétricos reduz emissões e melhora o ar no centro", "positivo"),
-    ("Prefeitura instala nova estação de monitoramento do ar no bairro", "neutro"),
+    ("Fim das queimadas faz a qualidade do ar voltar ao normal em Porto Velho", "positivo"),
+    ("Estudo mostra queda da poluição na cidade após ampliação do metrô", "positivo"),
+    ("Fumaça das queimadas deixa qualidade do ar péssima e escolas suspendem aulas", "negativo"),
+    ("Hospitais registram alta de atendimentos respiratórios por causa da poluição", "negativo"),
+    ("Inversão térmica piora o ar e índice atinge nível muito ruim em São Paulo", "negativo"),
+    ("Nuvem de fumaça cobre Manaus pelo terceiro dia seguido", "negativo"),
+    ("Cetesb divulga boletim diário de qualidade do ar nesta segunda", "neutro"),
+    ("Especialistas explicam como é calculado o índice de qualidade do ar", "neutro"),
+    ("Seminário sobre monitoramento do ar acontece na próxima semana em Brasília", "neutro"),
+    ("Saiba quais poluentes são medidos pelas estações automáticas", "neutro"),
 ]
 
 
 # ---------------------------------------------------------------- tarefas
 def montar_tarefas() -> list[dict]:
-    """Monta as 4 tarefas do TP4 a partir dos dados já coletados pelo projeto."""
+    """Monta as tarefas do TP4. Sentimento, Q&A e resumo usam os MESMOS prompts da rota
+    POST /processar_texto (src/llm.py), para que a avaliação meça o que a API faz."""
     tarefas = []
 
     # 1) Classificação de sentimento (com gabarito)
     for i, (frase, rotulo) in enumerate(SENTIMENTO):
         tarefas.append({
             "id": f"sentimento-{i}", "tipo": "sentimento", "esperado": rotulo,
-            "prompt": ("Classifique o sentimento desta manchete sobre qualidade do ar como "
-                       "positivo, negativo ou neutro. Responda com uma única palavra.\n\n"
-                       f"Manchete: {frase}"),
+            "prompt": montar_prompt("sentimento", frase)[0],
         })
 
     # 2) Perguntas e respostas sobre a tabela oficial (com gabarito)
@@ -79,16 +86,11 @@ def montar_tarefas() -> list[dict]:
     if tabela is not None:
         for pol, cat in [("MP2.5", "Moderada"), ("O3", "Ruim"), ("CO", "Boa")]:
             linha = tabela[(tabela["poluente"] == pol) & (tabela["categoria"] == cat)].iloc[0]
-            contexto = "\n".join(
-                f"- {r.poluente}, {r.categoria}: de {r.conc_min:g} a {r.conc_max:g} {r.unidade}"
-                for r in tabela[tabela["poluente"] == pol].itertuples() if pd.notna(r.conc_max)
-            )
+            pergunta = f"Qual é a faixa de concentração de {pol} para a qualidade do ar '{cat}'?"
             tarefas.append({
                 "id": f"qa-{pol}-{cat}", "tipo": "qa",
                 "esperado": [f"{linha['conc_min']:g}", f"{linha['conc_max']:g}"],
-                "prompt": ("Use somente a tabela abaixo para responder.\n\n"
-                           f"{contexto}\n\nPergunta: qual é a faixa de concentração de {pol} "
-                           f"para a qualidade do ar '{cat}'?"),
+                "prompt": montar_prompt("pergunta", pergunta)[0],
             })
 
     # 3) Resumo de notícia (avaliação manual)
@@ -97,8 +99,7 @@ def montar_tarefas() -> list[dict]:
         n = noticias.iloc[0]
         tarefas.append({
             "id": "resumo-0", "tipo": "resumo", "esperado": None,
-            "prompt": ("Resuma em uma frase o assunto destas manchetes sobre qualidade do ar:\n\n"
-                       f"{n['resumo']}"),
+            "prompt": montar_prompt("resumo", n["resumo"])[0],
         })
 
     # 4) Geração de boletim (avaliação manual)

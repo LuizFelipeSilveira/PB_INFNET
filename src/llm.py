@@ -10,9 +10,9 @@ Usado por:
   * scripts/llm/avaliar_modelos.py -> comparação dos modelos candidatos
 
 Configuração por variáveis de ambiente (todas opcionais):
-  ETER_LLM_MODELO       repositório do Hugging Face (padrão: Qwen/Qwen3.5-2B)
+  ETER_LLM_MODELO       repositório do Hugging Face (padrão: Qwen/Qwen3.5-0.8B)
   ETER_LLM_DISPOSITIVO  "auto" (GPU se houver), "gpu" ou "cpu"
-  ETER_LLM_QUANT        "auto", "4bit", "fp16" ou "fp32" (auto: 4bit na GPU, fp32 na CPU)
+  ETER_LLM_QUANT        "auto", "4bit", "fp16" ou "fp32" (auto: ver QUANT_NA_GPU)
 
 `torch` e `transformers` só são importados quando o modelo é carregado, para
 que o app Streamlit e o resto da API continuem funcionando sem eles.
@@ -28,7 +28,13 @@ from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parents[1]
 PASTA_MODELOS = RAIZ / "modelos"
-MODELO_PADRAO = "Qwen/Qwen3.5-2B"
+# Escolha justificada em docs/model/ModelSelection.md (rodada 2: mesmo acerto do 2B,
+# 3,7x mais rápido na GTX 1050 Ti).
+MODELO_PADRAO = "Qwen/Qwen3.5-0.8B"
+# Formato padrão na GPU: modelos que cabem inteiros em FP16 rodam sem quantização
+# (em placas antigas, descompactar os pesos de 4 bits a cada passo custa caro);
+# os maiores usam NF4 em 4 bits para caber nos 4 GB.
+QUANT_NA_GPU = {"Qwen/Qwen3.5-0.8B": "fp16"}
 
 INSTRUCAO_SISTEMA = (
     "Você é o assistente do Éter, um app brasileiro de qualidade do ar. "
@@ -70,7 +76,7 @@ def carregar(repo: str, dispositivo: str = "auto", quant: str = "auto"):
     if dispositivo == "gpu" and not usar_gpu:
         raise RuntimeError("ETER_LLM_DISPOSITIVO=gpu, mas o PyTorch não encontrou GPU CUDA.")
     if quant == "auto":
-        quant = "4bit" if usar_gpu else "fp32"
+        quant = QUANT_NA_GPU.get(repo, "4bit") if usar_gpu else "fp32"
 
     origem = origem_do_modelo(repo)
     tokenizer = AutoTokenizer.from_pretrained(origem)
@@ -135,10 +141,28 @@ def _contexto_iqar(pergunta: str) -> str:
         tabela = tabela[tabela["poluente"].isin(citados)]
     linhas = []
     for r in tabela.itertuples():
-        teto = f"{r.conc_max:g}" if pd.notna(r.conc_max) else "sem limite"
+        faixa = (f"de {r.conc_min:g} a {r.conc_max:g}" if pd.notna(r.conc_max)
+                 else f"acima de {r.conc_min:g}")
         linhas.append(f"- {r.poluente}, {r.categoria} (índice {r.indice_min}–{r.indice_max}): "
-                      f"de {r.conc_min:g} a {teto} {r.unidade}")
+                      f"{faixa} {r.unidade}")
     return "\n".join(linhas)
+
+
+# A definição de cada rótulo e os exemplos corrigem o erro mais comum dos modelos
+# pequenos na rodada 2: chamar de "positivo"/"negativo" notícias só informativas.
+PROMPT_SENTIMENTO = """Classifique o sentimento da notícia abaixo, sobre qualidade do ar:
+- positivo: relata melhora do ar ou uma boa notícia para a saúde das pessoas;
+- negativo: relata piora do ar, poluição, fumaça ou danos à saúde;
+- neutro: só informa, explica ou divulga algo, sem indicar melhora nem piora.
+
+Exemplos:
+Ventos dispersam a fumaça e o ar volta a ficar bom -> positivo
+Queimadas elevam a poluição e hospitais ficam lotados -> negativo
+Órgão ambiental publica relatório anual sobre o ar -> neutro
+
+Responda com uma única palavra: positivo, negativo ou neutro.
+
+Notícia: {texto}"""
 
 
 def montar_prompt(tarefa: str, texto: str) -> tuple[str, int]:
@@ -146,8 +170,7 @@ def montar_prompt(tarefa: str, texto: str) -> tuple[str, int]:
     if tarefa == "resumo":
         return (f"Resuma o texto abaixo em no máximo duas frases.\n\nTexto:\n{texto}", 120)
     if tarefa == "sentimento":
-        return ("Classifique o sentimento do texto abaixo como positivo, negativo ou neutro. "
-                f"Responda com uma única palavra.\n\nTexto:\n{texto}", 5)
+        return (PROMPT_SENTIMENTO.format(texto=texto), 5)
     if tarefa == "pergunta":
         return ("Responda à pergunta usando somente a tabela oficial do IQAr abaixo. Se a "
                 "resposta não estiver na tabela, diga que não sabe.\n\n"
