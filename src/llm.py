@@ -13,6 +13,11 @@ Configuração por variáveis de ambiente (todas opcionais):
   ETER_LLM_MODELO       repositório do Hugging Face (padrão: Qwen/Qwen3.5-0.8B)
   ETER_LLM_DISPOSITIVO  "auto" (GPU se houver), "gpu" ou "cpu"
   ETER_LLM_QUANT        "auto", "4bit", "fp16" ou "fp32" (auto: ver QUANT_NA_GPU)
+  ETER_LLM_TIMEOUT_S    tempo máximo de geração por pedido, em segundos (padrão: 120)
+  ETER_LLM_ESPERA_S     quanto um pedido espera na fila se o modelo estiver ocupado (padrão: 30)
+
+Falhas viram exceções específicas (`LLMErro` e subclasses, no fim deste arquivo), que
+a API traduz em códigos HTTP e mensagens claras (ver api/erros.py).
 
 `torch` e `transformers` só são importados quando o modelo é carregado, para
 que o app Streamlit e o resto da API continuem funcionando sem eles.
@@ -100,8 +105,13 @@ def carregar(repo: str, dispositivo: str = "auto", quant: str = "auto"):
 
 
 def gerar(tokenizer, modelo, prompt: str, max_tokens: int = 160,
-          sistema: str = INSTRUCAO_SISTEMA) -> tuple[str, int, float]:
-    """Gera uma resposta. Devolve (texto, tokens gerados, segundos)."""
+          sistema: str = INSTRUCAO_SISTEMA,
+          max_time: float | None = None) -> tuple[str, int, float]:
+    """Gera uma resposta. Devolve (texto, tokens gerados, segundos).
+
+    `max_time` (segundos) faz o próprio Transformers interromper a geração se ela
+    passar do limite.
+    """
     import torch
 
     mensagens = [{"role": "system", "content": sistema},
@@ -114,6 +124,7 @@ def gerar(tokenizer, modelo, prompt: str, max_tokens: int = 160,
     with torch.no_grad():
         # do_sample=False (decodificação gulosa): mesma entrada -> mesma saída
         saida = modelo.generate(**entradas, max_new_tokens=max_tokens, do_sample=False,
+                                max_time=max_time,
                                 pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id)
     duracao = time.perf_counter() - inicio
     novos = saida[0][entradas["input_ids"].shape[-1]:]
@@ -195,6 +206,60 @@ def montar_prompt(tarefa: str, texto: str) -> tuple[str, int]:
     raise ValueError(f"Tarefa desconhecida: {tarefa}")
 
 
+# ---------------------------------------------------------------- erros do LLM
+class LLMErro(Exception):
+    """Base das falhas do LLM local. A API traduz cada subclasse num código HTTP."""
+
+
+class LLMDependenciasAusentes(LLMErro):
+    """torch/transformers (ou bitsandbytes) não estão instalados neste ambiente."""
+
+
+class LLMModeloNaoEncontrado(LLMErro):
+    """O modelo não está em modelos/ nem no cache, e não foi possível baixá-lo."""
+
+
+class LLMMemoriaInsuficiente(LLMErro):
+    """Faltou memória na GPU (ou RAM) para carregar o modelo ou gerar a resposta."""
+
+
+class LLMFalhaCarga(LLMErro):
+    """Qualquer outra falha ao carregar o modelo."""
+
+
+class LLMOcupado(LLMErro):
+    """O modelo está atendendo outro pedido e a espera passou do limite."""
+
+    def __init__(self, espera_s: float):
+        super().__init__(f"o modelo está ocupado há mais de {espera_s:g} s")
+        self.espera_s = espera_s
+
+
+class LLMTempoEsgotado(LLMErro):
+    """A geração passou do tempo máximo configurado."""
+
+    def __init__(self, limite_s: float):
+        super().__init__(f"a geração passou do limite de {limite_s:g} s")
+        self.limite_s = limite_s
+
+
+class LLMFalhaGeracao(LLMErro):
+    """Erro inesperado durante a geração do texto."""
+
+
+def _sem_memoria(erro: BaseException) -> bool:
+    return type(erro).__name__ == "OutOfMemoryError" or "out of memory" in str(erro).lower()
+
+
+def _liberar_gpu() -> None:
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except ImportError:
+        pass
+
+
 class LLMLocal:
     """Mantém UM modelo carregado na memória e atende um pedido por vez.
 
@@ -210,6 +275,9 @@ class LLMLocal:
         self._tokenizer = self._modelo = None
         self.formato: str | None = None
         self.tempo_carga_s: float | None = None
+        self.timeout_s = float(os.getenv("ETER_LLM_TIMEOUT_S", "120"))
+        self.espera_s = float(os.getenv("ETER_LLM_ESPERA_S", "30"))
+        self.ultimo_erro: str | None = None  # aparece em GET /llm/status, ajuda no diagnóstico
         self._cadeado = threading.Lock()
 
     @property
@@ -218,21 +286,55 @@ class LLMLocal:
 
     def status(self) -> dict:
         return {"modelo": self.repo, "origem": origem_do_modelo(self.repo),
-                "carregado": self.carregado, "formato": self.formato,
-                "tempo_carga_s": self.tempo_carga_s}
+                "carregado": self.carregado, "ocupado": self._cadeado.locked(),
+                "formato": self.formato, "tempo_carga_s": self.tempo_carga_s,
+                "timeout_s": self.timeout_s, "ultimo_erro": self.ultimo_erro}
+
+    def _falhou(self, erro: LLMErro) -> LLMErro:
+        self.ultimo_erro = f"{type(erro).__name__}: {erro}"
+        return erro
 
     def _garantir_carregado(self) -> None:
-        if self._modelo is None:
-            inicio = time.perf_counter()
+        """Carrega o modelo no primeiro uso. Se falhar, o próximo pedido tenta de novo."""
+        if self._modelo is not None:
+            return
+        inicio = time.perf_counter()
+        try:
             self._tokenizer, self._modelo, self.formato = carregar(
                 self.repo, self.dispositivo, self.quant)
-            self.tempo_carga_s = round(time.perf_counter() - inicio, 1)
+        except ImportError as erro:
+            raise self._falhou(LLMDependenciasAusentes(str(erro))) from erro
+        except OSError as erro:  # modelo inexistente, sem internet e sem cópia local...
+            raise self._falhou(LLMModeloNaoEncontrado(str(erro).split("\n")[0])) from erro
+        except Exception as erro:  # noqa: BLE001 - qualquer outra falha vira erro de carga
+            _liberar_gpu()
+            self._tokenizer = self._modelo = None
+            if _sem_memoria(erro):
+                raise self._falhou(LLMMemoriaInsuficiente(str(erro).split("\n")[0])) from erro
+            raise self._falhou(LLMFalhaCarga(str(erro).split("\n")[0])) from erro
+        self.tempo_carga_s = round(time.perf_counter() - inicio, 1)
+        self.ultimo_erro = None
 
     def processar(self, tarefa: str, texto: str) -> dict:
         prompt, max_tokens = montar_prompt(tarefa, texto)
-        with self._cadeado:
+        # Espera a vez na fila por no máximo `espera_s`; depois desiste com LLMOcupado,
+        # em vez de deixar o cliente esperando sem resposta.
+        if not self._cadeado.acquire(timeout=self.espera_s):
+            raise LLMOcupado(self.espera_s)
+        try:
             self._garantir_carregado()
-            resposta, n_tokens, segundos = gerar(self._tokenizer, self._modelo, prompt, max_tokens)
+            try:
+                resposta, n_tokens, segundos = gerar(
+                    self._tokenizer, self._modelo, prompt, max_tokens, max_time=self.timeout_s)
+            except Exception as erro:  # noqa: BLE001
+                _liberar_gpu()
+                if _sem_memoria(erro):
+                    raise self._falhou(LLMMemoriaInsuficiente(str(erro).split("\n")[0])) from erro
+                raise self._falhou(LLMFalhaGeracao(f"{type(erro).__name__}: {erro}")) from erro
+        finally:
+            self._cadeado.release()
+        if segundos >= self.timeout_s:
+            raise self._falhou(LLMTempoEsgotado(self.timeout_s))
         # Saída "crua": quem chama (a API) interpreta e valida conforme a tarefa.
         return {"resultado": resposta, "tokens_gerados": n_tokens,
                 "tempo_s": round(segundos, 2)}

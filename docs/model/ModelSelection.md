@@ -331,6 +331,9 @@ Decisões de implementação:
 - **Offline de verdade:** se `modelos/<nome>` existe, o Transformers lê dali e não acessa a
   internet. Para garantir isso também com o cache do Hugging Face, defina
   `HF_HUB_OFFLINE=1` antes de subir a API.
+- **Erros específicos:** cada falha do modelo (dependência ausente, modelo não baixado, falta
+  de memória, ocupado, tempo esgotado) vira uma exceção própria em `src/llm.py`, que a API
+  traduz no código HTTP e na orientação certos (`api/erros.py`; tabela no README).
 - **API funciona sem o LLM:** `torch` e `transformers` só são importados no primeiro pedido.
   Sem eles, as outras rotas funcionam normalmente e `/processar_texto` responde `503` com
   instruções.
@@ -343,6 +346,8 @@ Decisões de implementação:
 | `ETER_LLM_DISPOSITIVO` | `auto` | `gpu` ou `cpu` para forçar |
 | `ETER_LLM_QUANT` | `auto` | `4bit`, `fp16` ou `fp32` (auto: FP16 na GPU para o 0,8B, 4 bits para os maiores, FP32 na CPU) |
 | `HF_HUB_OFFLINE` | (vazio) | `1` impede qualquer acesso ao Hugging Face |
+| `ETER_LLM_TIMEOUT_S` | `120` | tempo máximo de geração por pedido; acima disso, a API responde 504 |
+| `ETER_LLM_ESPERA_S` | `30` | quanto um pedido espera o modelo ficar livre; acima disso, 503 `llm_ocupado` |
 
 ## 10. Referências
 

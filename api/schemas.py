@@ -17,7 +17,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Annotated, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from src.data_loader import POLUENTES_VALIDOS
 
@@ -105,6 +105,15 @@ class PedidoTexto(Pedido):
         description="resumo: resume o texto em até duas frases; sentimento: positivo, negativo "
                     "ou neutro; pergunta: responde usando a tabela oficial do IQAr.")
 
+    @field_validator("texto")
+    @classmethod
+    def texto_com_conteudo(cls, valor: str) -> str:
+        """Espaços nas pontas não contam: "   oi   " não passa só por ter 8 caracteres."""
+        valor = valor.strip()
+        if len(valor) < 3:
+            raise ValueError("deve ter pelo menos 3 caracteres além de espaços")
+        return valor
+
 
 class AnaliseResumo(BaseModel):
     tipo: Literal["resumo"] = "resumo"
@@ -158,8 +167,12 @@ class StatusLLM(BaseModel):
     modelo: str
     origem: str = Field(..., description="Pasta local (modelos/...) ou nome no Hugging Face.")
     carregado: bool
+    ocupado: bool = Field(..., description="True enquanto um pedido está sendo processado.")
     formato: str | None = None
     tempo_carga_s: float | None = Field(None, ge=0)
+    timeout_s: float = Field(..., gt=0, description="Tempo máximo de geração por pedido.")
+    ultimo_erro: str | None = Field(None, description="Última falha do modelo (diagnóstico); "
+                                                      "volta a vazio após uma carga bem-sucedida.")
 
 
 # ---------------------------------------------------------------- erros
@@ -169,11 +182,14 @@ class CampoInvalido(BaseModel):
 
 
 class ErroAPI(BaseModel):
-    """Formato único de TODOS os erros da API (400, 404, 422, 502, 503)."""
+    """Formato único de TODOS os erros da API (4xx e 5xx). Ver api/erros.py."""
 
     status: int = Field(..., ge=400, le=599)
     erro: str = Field(..., description="Código curto e estável, bom para tratar no cliente.",
-                      examples=["entrada_invalida"])
-    mensagem: str = Field(..., description="Explicação em português para a pessoa usuária.")
+                      examples=["llm_modelo_nao_encontrado"])
+    mensagem: str = Field(..., description="O que aconteceu, em português.")
+    sugestao: str | None = Field(None, description="O que fazer para resolver.")
     campos: list[CampoInvalido] = Field(default_factory=list,
-                                        description="Preenchido nos erros 422.")
+                                        description="Campos com problema (erros 422).")
+    id_requisicao: str = Field(..., description="Também no cabeçalho X-Request-ID e no log do "
+                                                "servidor; informe-o ao relatar um problema.")

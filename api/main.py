@@ -17,12 +17,9 @@ from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.exceptions import RequestValidationError
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from pydantic import ValidationError
-from starlette.exceptions import HTTPException as StarletteHTTPException
 
 RAIZ = Path(__file__).resolve().parents[1]
 if str(RAIZ) not in sys.path:
@@ -32,13 +29,14 @@ from src import data_loader as dl  # noqa: E402
 from src.api import CIDADES  # noqa: E402
 from src.iqar import RECOMENDACOES, calcular_indice, categoria  # noqa: E402
 
-from src.llm import LLMLocal, contexto_iqar, rotulo_sentimento  # noqa: E402
+from src.llm import LLMErro, LLMLocal, contexto_iqar, rotulo_sentimento  # noqa: E402
 
+from api import erros as tratamento  # noqa: E402
+from api.erros import ErroHTTP, erro_do_llm  # noqa: E402
 from api.schemas import (  # noqa: E402
     AnalisePergunta,
     AnaliseResumo,
     AnaliseSentimento,
-    CampoInvalido,
     Cidade,
     ErroAPI,
     FaixaReferencia,
@@ -62,7 +60,7 @@ llm = LLMLocal()
 app = FastAPI(
     title="Éter API",
     description="Dados e cálculo de qualidade do ar (IQAr) do projeto Éter.",
-    version="1.1.0",
+    version="1.2.0",
 )
 
 # Em produção, restrinja allow_origins ao domínio real do front-end.
@@ -72,46 +70,8 @@ app.add_middleware(
 
 
 # ---------------------------------------------------------------- erros padronizados
-# Todo erro sai no formato `ErroAPI` (ver api/schemas.py): {status, erro, mensagem, campos}.
-CODIGOS_ERRO = {400: "requisicao_invalida", 404: "nao_encontrado", 422: "entrada_invalida",
-                502: "resposta_invalida_do_modelo", 503: "llm_indisponivel"}
-
-
-def _erro(status: int, mensagem: str, campos: list[CampoInvalido] | None = None) -> JSONResponse:
-    corpo = ErroAPI(status=status, erro=CODIGOS_ERRO.get(status, "erro"), mensagem=mensagem,
-                    campos=campos or [])
-    return JSONResponse(status_code=status, content=corpo.model_dump())
-
-
-def _traduzir(e: dict) -> str:
-    """Mensagens do Pydantic em português, para os casos mais comuns."""
-    ctx = e.get("ctx", {})
-    return {
-        "missing": "campo obrigatório",
-        "string_too_short": f"deve ter pelo menos {ctx.get('min_length')} caracteres",
-        "string_too_long": f"deve ter no máximo {ctx.get('max_length')} caracteres",
-        "literal_error": f"valor inválido; use um de: {ctx.get('expected')}",
-        "greater_than_equal": f"deve ser maior ou igual a {ctx.get('ge')}",
-        "less_than_equal": f"deve ser menor ou igual a {ctx.get('le')}",
-        "float_parsing": "deve ser um número",
-        "int_parsing": "deve ser um número inteiro",
-        "date_from_datetime_parsing": "deve ser uma data no formato AAAA-MM-DD",
-        "extra_forbidden": "campo não reconhecido por esta rota",
-        "json_invalid": "o corpo não é um JSON válido",
-        "model_attributes_type": "o corpo deve ser um objeto JSON",
-    }.get(e["type"], e["msg"])
-
-
-@app.exception_handler(RequestValidationError)
-def _erro_validacao(_: Request, exc: RequestValidationError) -> JSONResponse:
-    campos = [CampoInvalido(campo=".".join(str(p) for p in e["loc"][1:]) or e["loc"][0],
-                            mensagem=_traduzir(e)) for e in exc.errors()]
-    return _erro(422, "A requisição tem campos inválidos. Veja a lista em 'campos'.", campos)
-
-
-@app.exception_handler(StarletteHTTPException)
-def _erro_http(_: Request, exc: StarletteHTTPException) -> JSONResponse:
-    return _erro(exc.status_code, str(exc.detail))
+# Middleware de id de requisição + tratadores de exceção (formato ErroAPI). Ver api/erros.py.
+tratamento.registrar(app)
 
 
 def erros(*status: int) -> dict:
@@ -133,7 +93,7 @@ def listar_cidades() -> list[Cidade]:
 
 
 @app.get("/iqar/tabela", response_model=list[FaixaReferencia], tags=["consulta"],
-         responses=erros(404, 422))
+         responses=erros(404, 422, 500, 503))
 def tabela_iqar(
     poluente: str | None = Query(None, description="Filtra por sigla (ex.: MP2.5). Omita para trazer tudo."),
 ) -> list[FaixaReferencia]:
@@ -143,13 +103,15 @@ def tabela_iqar(
     das faixas oficiais sem reimplementar a metodologia CETESB/CONAMA 491/2018.
     """
     if not dl.ARQ_IQAR.exists():
-        raise HTTPException(404, "Tabela de referência ainda não gerada. "
-                                  "Rode scripts/scraping/scrape_iqar.py.")
-    tabela = pd.read_csv(dl.ARQ_IQAR)
+        raise ErroHTTP(503, "dados_indisponiveis", "A tabela de referência do IQAr ainda não foi gerada.",
+                       "Rode `python scripts/scraping/scrape_iqar.py` na raiz do projeto.")
+    tabela = _ler_csv_seguro(dl.ARQ_IQAR)
     if poluente:
-        tabela = tabela[tabela["poluente"].str.upper() == poluente.upper()]
+        sigla = dl.normalizar_poluente(poluente)
+        tabela = tabela[tabela["poluente"] == sigla]
         if tabela.empty:
-            raise HTTPException(404, f"Poluente '{poluente}' não encontrado.")
+            raise ErroHTTP(404, "poluente_nao_encontrado", f"Poluente '{poluente}' não encontrado.",
+                           f"Use um de {sorted(dl.POLUENTES_VALIDOS)} (PM2.5 também é aceito).")
     # astype(object) antes do where: numa coluna float, o None voltaria a ser NaN,
     # que não é um número válido (a regra conc_max >= 0 do modelo de resposta recusa).
     tabela = tabela.astype(object).where(pd.notnull(tabela), None)
@@ -171,20 +133,38 @@ def calcular(
     try:
         idx = calcular_indice(sigla, concentracao)
     except ValueError as erro:
-        raise HTTPException(400, str(erro)) from erro
+        raise ErroHTTP(400, "poluente_invalido", f"Poluente desconhecido: '{poluente}'.",
+                       f"Use um de {sorted(dl.POLUENTES_VALIDOS)} (PM2.5 também é aceito).") from erro
     cat = categoria(idx)
     return ResultadoIQAr(poluente=sigla, concentracao=concentracao,
                          iqar=idx, categoria=cat, recomendacao=RECOMENDACOES[cat])
 
 
+def _ler_csv_seguro(caminho: Path) -> pd.DataFrame:
+    """Lê um CSV de dados do projeto; arquivo ilegível vira erro 500 claro, não um traceback."""
+    try:
+        return pd.read_csv(caminho)
+    except (pd.errors.ParserError, pd.errors.EmptyDataError, UnicodeDecodeError, OSError) as erro:
+        raise ErroHTTP(500, "dados_corrompidos",
+                       f"Não foi possível ler {caminho.relative_to(RAIZ)} ({type(erro).__name__}).",
+                       "Confira o arquivo ou gere-o de novo. Se for o de leituras, mova-o para "
+                       "outro lugar: a API cria um novo no próximo POST /leituras.") from erro
+
+
 def _carregar_leituras() -> pd.DataFrame:
     if ARQ_LEITURAS_API.exists():
-        return pd.read_csv(ARQ_LEITURAS_API)
+        df = _ler_csv_seguro(ARQ_LEITURAS_API)
+        if faltando := set(COLUNAS_LEITURAS_API) - set(df.columns):
+            raise ErroHTTP(500, "dados_corrompidos",
+                           f"O arquivo de leituras não tem as colunas {sorted(faltando)}.",
+                           "Mova data/processed/leituras_api.csv para outro lugar; a API cria "
+                           "um novo no próximo POST /leituras.")
+        return df
     return pd.DataFrame(columns=COLUNAS_LEITURAS_API)
 
 
 @app.get("/leituras", response_model=list[LeituraRegistrada], tags=["leituras"],
-         responses=erros(422))
+         responses=erros(422, 500))
 def listar_leituras(
     cidade: str | None = None,
     limite: int = Query(100, ge=1, le=1000),
@@ -194,11 +174,16 @@ def listar_leituras(
     if cidade:
         df = df[df["cidade"].str.casefold() == cidade.casefold()]
     df = df.sort_values("recebido_em", ascending=False).head(limite)
-    return [LeituraRegistrada(**linha) for linha in df.to_dict(orient="records")]
+    try:
+        return [LeituraRegistrada(**linha) for linha in df.to_dict(orient="records")]
+    except ValidationError as erro:  # linha editada à mão com valor fora do contrato
+        raise ErroHTTP(500, "dados_corrompidos",
+                       f"Há leituras gravadas fora do formato esperado ({erro.errors()[0]['msg']}).",
+                       "Corrija ou remova as linhas inválidas de data/processed/leituras_api.csv.") from erro
 
 
 @app.post("/leituras", response_model=LeituraRegistrada, status_code=201, tags=["leituras"],
-          responses=erros(400, 422))
+          responses=erros(400, 422, 500, 503))
 def registrar_leitura(leitura: NovaLeitura) -> LeituraRegistrada:
     """POST — registra uma nova leitura (de um sensor, estação local ou relatório manual).
 
@@ -209,8 +194,8 @@ def registrar_leitura(leitura: NovaLeitura) -> LeituraRegistrada:
     """
     sigla = dl.normalizar_poluente(leitura.poluente)
     if sigla not in dl.POLUENTES_VALIDOS:
-        raise HTTPException(400, f"Poluente inválido: {leitura.poluente}. "
-                                  f"Use um de {sorted(dl.POLUENTES_VALIDOS)}.")
+        raise ErroHTTP(400, "poluente_invalido", f"Poluente inválido: '{leitura.poluente}'.",
+                       f"Use um de {sorted(dl.POLUENTES_VALIDOS)} (PM2.5 também é aceito).")
 
     idx = calcular_indice(sigla, leitura.valor)
     registro = {
@@ -224,10 +209,16 @@ def registrar_leitura(leitura: NovaLeitura) -> LeituraRegistrada:
         "categoria": categoria(idx),
     }
 
-    ARQ_LEITURAS_API.parent.mkdir(parents=True, exist_ok=True)
     df = _carregar_leituras()
     df = pd.concat([df, pd.DataFrame([registro])], ignore_index=True)
-    df.to_csv(ARQ_LEITURAS_API, index=False)
+    try:
+        ARQ_LEITURAS_API.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(ARQ_LEITURAS_API, index=False)
+    except OSError as erro:  # sem permissão, disco cheio, arquivo aberto no Excel...
+        raise ErroHTTP(503, "armazenamento_indisponivel",
+                       f"Não foi possível gravar a leitura ({type(erro).__name__}).",
+                       "Feche o arquivo data/processed/leituras_api.csv se estiver aberto em "
+                       "outro programa e tente de novo.") from erro
 
     return LeituraRegistrada(
         cidade=registro["cidade"], poluente=sigla, valor=leitura.valor,
@@ -240,7 +231,7 @@ def registrar_leitura(leitura: NovaLeitura) -> LeituraRegistrada:
 # ---------------------------------------------------------------- LLM local (TP4)
 @app.get("/llm/status", response_model=StatusLLM, tags=["llm"])
 def status_llm() -> StatusLLM:
-    """GET — informa qual modelo está configurado e se já foi carregado na memória."""
+    """GET — modelo configurado, se está carregado/ocupado e a última falha (diagnóstico)."""
     return StatusLLM(**llm.status())
 
 
@@ -265,7 +256,7 @@ def _montar_analise(tarefa: str, texto: str, resposta: str):
 
 
 @app.post("/processar_texto", response_model=RespostaProcessamento, tags=["llm"],
-          responses=erros(422, 502, 503))
+          responses=erros(422, 500, 502, 503, 504))
 def processar_texto(pedido: PedidoTexto) -> RespostaProcessamento:
     """POST — processa um texto com o LLM que roda **localmente** (Transformers, sem nuvem).
 
@@ -273,6 +264,14 @@ def processar_texto(pedido: PedidoTexto) -> RespostaProcessamento:
     * `resumo`: resumo em até duas frases, com contagem de palavras e taxa de compressão;
     * `sentimento`: rótulo positivo/negativo/neutro, mais a resposta exata do modelo;
     * `pergunta`: resposta baseada na tabela oficial do IQAr, com os poluentes consultados.
+
+    Erros possíveis (todos no formato ErroAPI, com `sugestao` e `id_requisicao`):
+    * 422 `entrada_invalida`: texto vazio, curto/longo demais ou tarefa inexistente;
+    * 503 `llm_dependencias_ausentes`, `llm_modelo_nao_encontrado`, `llm_memoria_insuficiente`,
+      `llm_falha_carga`: o modelo não pôde ser carregado;
+    * 503 `llm_ocupado` (com cabeçalho Retry-After): outro pedido está em processamento;
+    * 504 `llm_tempo_esgotado`: a geração passou de ETER_LLM_TIMEOUT_S;
+    * 502 `resposta_invalida_do_modelo`: o modelo respondeu fora do formato (ex.: vazio).
 
     O campo `analise.tipo` indica qual dos três formatos veio. O primeiro pedido carrega
     o modelo e pode levar de segundos a alguns minutos; os seguintes reaproveitam o
@@ -282,16 +281,15 @@ def processar_texto(pedido: PedidoTexto) -> RespostaProcessamento:
     texto = pedido.texto.strip()
     try:
         saida = llm.processar(pedido.tarefa, texto)
-    except (ImportError, OSError, RuntimeError) as erro:
-        raise HTTPException(503, f"O modelo de linguagem local não pôde ser carregado ({erro}). "
-                                 "Instale as dependências de requirements-llm.txt e baixe o "
-                                 "modelo com scripts/llm/baixar_modelo.py.") from erro
+    except LLMErro as erro:  # cada falha do modelo vira um status e uma orientação próprios
+        raise erro_do_llm(erro) from erro
     try:
         analise = _montar_analise(pedido.tarefa, texto, saida["resultado"])
     except ValidationError as erro:
-        raise HTTPException(502, "O modelo gerou uma resposta fora do formato esperado "
-                                 f"({erro.errors()[0]['msg']}). Tente novamente ou reformule "
-                                 "o texto.") from erro
+        raise ErroHTTP(502, "resposta_invalida_do_modelo",
+                       f"O modelo gerou uma resposta fora do formato esperado "
+                       f"({erro.errors()[0]['msg']}).",
+                       "Tente novamente ou reformule o texto (ex.: deixe-o mais longo e claro).") from erro
     return RespostaProcessamento(
         tarefa=pedido.tarefa, texto_entrada=texto, analise=analise,
         metadados=MetadadosLLM(modelo=llm.repo, formato=llm.formato,

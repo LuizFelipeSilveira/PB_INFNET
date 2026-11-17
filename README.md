@@ -130,16 +130,45 @@ O conteúdo de `analise` depende de `analise.tipo`:
 - `sentimento`: traz `rotulo`, `rotulo_valido` e `resposta_modelo`;
 - `pergunta`: traz `resposta`, `poluentes_consultados` e `fonte`.
 
-Todos os erros seguem um único formato, `{"status", "erro", "mensagem", "campos"}`, com
-mensagens em português. Os códigos de `erro` são:
+### Tratamento de erros
+
+Todos os erros seguem um único formato (`ErroAPI`), com o que aconteceu, o que fazer e um id
+para o diagnóstico:
+
+```json
+{
+  "status": 503,
+  "erro": "llm_modelo_nao_encontrado",
+  "mensagem": "O modelo de linguagem não foi encontrado nesta máquina (...).",
+  "sugestao": "Baixe o modelo uma vez com `python scripts/llm/baixar_modelo.py` (...)",
+  "campos": [],
+  "id_requisicao": "19aeecc7"
+}
+```
+
+O `id_requisicao` volta também no cabeçalho `X-Request-ID` e aparece na linha de log do
+terminal da API. Com ele, dá para achar exatamente qual pedido falhou. Erros inesperados
+(500) nunca expõem detalhes internos ao cliente: o *traceback* fica só no log.
 
 | Status | `erro` | Quando |
 |---|---|---|
-| 400 | `requisicao_invalida` | ex.: poluente inexistente em `/iqar/calcular` |
-| 404 | `nao_encontrado` | rota ou dado inexistente |
-| 422 | `entrada_invalida` | campo ausente, fora dos limites ou desconhecido (lista em `campos`) |
+| 400 | `poluente_invalido` | poluente inexistente em `/iqar/calcular` ou `POST /leituras` |
+| 404 | `nao_encontrado`, `poluente_nao_encontrado` | rota inexistente; poluente fora da tabela |
+| 422 | `entrada_invalida` | campo ausente, vazio, fora dos limites ou desconhecido (lista em `campos`) |
+| 500 | `dados_corrompidos` | CSV de dados ilegível ou fora do formato |
+| 500 | `llm_falha_geracao`, `erro_interno` | falha inesperada (detalhe no log, pelo id) |
 | 502 | `resposta_invalida_do_modelo` | o LLM devolveu algo fora do contrato (ex.: resumo vazio) |
-| 503 | `llm_indisponivel` | PyTorch/Transformers não instalados ou modelo não baixado |
+| 503 | `llm_dependencias_ausentes` | PyTorch/Transformers não instalados |
+| 503 | `llm_modelo_nao_encontrado` | modelo não baixado (e sem internet para baixar) |
+| 503 | `llm_memoria_insuficiente` | faltou memória na GPU ao carregar ou gerar |
+| 503 | `llm_falha_carga` | outra falha ao carregar o modelo |
+| 503 | `llm_ocupado` | outro pedido em processamento por mais de `ETER_LLM_ESPERA_S` (cabeçalho `Retry-After`) |
+| 503 | `dados_indisponiveis`, `armazenamento_indisponivel` | tabela IQAr não gerada; falha ao gravar leituras |
+| 504 | `llm_tempo_esgotado` | a geração passou de `ETER_LLM_TIMEOUT_S` (padrão 120 s) |
+
+`GET /llm/status` mostra se o modelo está carregado ou ocupado e a última falha
+(`ultimo_erro`). No app, a aba **LLM local** mostra cada erro com um título claro, a
+sugestão e o id. Ela também avisa quando a API está fora do ar.
 
 ## Deploy (Streamlit Community Cloud)
 

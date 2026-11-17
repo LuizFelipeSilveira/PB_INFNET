@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 import api.main as api_main
 from api.schemas import ErroAPI, RespostaProcessamento
+from src import llm
 from src.llm import montar_prompt, rotulo_sentimento
 
 cliente = TestClient(api_main.app)
@@ -102,21 +103,80 @@ def test_entrada_invalida_vira_422_em_portugues(llm_falso, corpo, campo, trecho)
     assert llm_falso.pedidos == []  # o modelo nem é chamado
 
 
-def test_llm_indisponivel_vira_503(monkeypatch):
-    monkeypatch.setattr(api_main, "llm", LLMFalso(erro=ImportError("No module named 'torch'")))
+def test_texto_so_com_espacos_vira_422(llm_falso):
+    r = processar(texto="      ", tarefa="resumo")
+    assert r.status_code == 422
+    assert "além de espaços" in r.json()["campos"][0]["mensagem"]
+
+
+@pytest.mark.parametrize("excecao, status, codigo", [
+    (llm.LLMDependenciasAusentes("No module named 'torch'"), 503, "llm_dependencias_ausentes"),
+    (llm.LLMModeloNaoEncontrado("Qwen/Inexistente"), 503, "llm_modelo_nao_encontrado"),
+    (llm.LLMMemoriaInsuficiente("CUDA out of memory"), 503, "llm_memoria_insuficiente"),
+    (llm.LLMFalhaCarga("arquivo corrompido"), 503, "llm_falha_carga"),
+    (llm.LLMOcupado(30), 503, "llm_ocupado"),
+    (llm.LLMTempoEsgotado(120), 504, "llm_tempo_esgotado"),
+    (llm.LLMFalhaGeracao("erro estranho"), 500, "llm_falha_geracao"),
+])
+def test_cada_falha_do_llm_tem_status_codigo_e_sugestao(monkeypatch, excecao, status, codigo):
+    monkeypatch.setattr(api_main, "llm", LLMFalso(erro=excecao))
     r = processar(texto="texto qualquer", tarefa="resumo")
-    assert r.status_code == 503
+    assert r.status_code == status
     erro = ErroAPI.model_validate(r.json())
-    assert erro.erro == "llm_indisponivel" and "requirements-llm.txt" in erro.mensagem
+    assert erro.erro == codigo
+    assert erro.sugestao  # sempre diz o que fazer
+    assert erro.id_requisicao == r.headers["X-Request-ID"]  # mesmo id no corpo e no cabeçalho
+
+
+def test_ocupado_informa_quando_tentar_de_novo(monkeypatch):
+    monkeypatch.setattr(api_main, "llm", LLMFalso(erro=llm.LLMOcupado(30)))
+    r = processar(texto="texto qualquer", tarefa="resumo")
+    assert r.headers["Retry-After"] == "30"
+
+
+def test_erro_inesperado_vira_500_sem_vazar_detalhes(monkeypatch):
+    monkeypatch.setattr(api_main, "llm", LLMFalso(erro=KeyError("segredo_interno")))
+    r = TestClient(api_main.app, raise_server_exceptions=False).post(
+        "/processar_texto", json={"texto": "texto qualquer", "tarefa": "resumo"})
+    assert r.status_code == 500
+    assert r.json()["erro"] == "erro_interno"
+    assert "segredo_interno" not in r.text  # o detalhe fica só no log do servidor
 
 
 def test_erros_das_outras_rotas_no_mesmo_formato():
     r = cliente.get("/iqar/calcular", params={"poluente": "XYZ", "concentracao": 10})
-    assert r.status_code == 400 and r.json()["erro"] == "requisicao_invalida"
+    assert r.status_code == 400 and r.json()["erro"] == "poluente_invalido"
     r = cliente.get("/iqar/calcular", params={"poluente": "MP10", "concentracao": -5})
     assert r.status_code == 422 and r.json()["campos"][0]["campo"] == "concentracao"
+    r = cliente.get("/iqar/tabela", params={"poluente": "XYZ"})
+    assert r.status_code == 404 and r.json()["erro"] == "poluente_nao_encontrado"
     r = cliente.get("/rota/que/nao/existe")
     assert r.status_code == 404 and r.json()["erro"] == "nao_encontrado"
+    assert r.json()["sugestao"]
+
+
+def test_tabela_nao_gerada_vira_503(monkeypatch, tmp_path):
+    monkeypatch.setattr(api_main.dl, "ARQ_IQAR", tmp_path / "nao_existe.csv")
+    r = cliente.get("/iqar/tabela")
+    assert r.status_code == 503 and r.json()["erro"] == "dados_indisponiveis"
+    assert "scrape_iqar.py" in r.json()["sugestao"]
+
+
+def test_arquivo_de_leituras_corrompido_vira_500_claro(monkeypatch, tmp_path):
+    corrompido = tmp_path / "leituras_api.csv"
+    corrompido.write_text("isto,nao\né,o,formato,certo\n", encoding="utf-8")
+    monkeypatch.setattr(api_main, "ARQ_LEITURAS_API", corrompido)
+    r = cliente.get("/leituras")
+    assert r.status_code == 500 and r.json()["erro"] == "dados_corrompidos"
+
+
+def test_falha_ao_gravar_leitura_vira_503(monkeypatch, tmp_path):
+    arquivo = tmp_path / "um_arquivo.txt"
+    arquivo.write_text("x")
+    # a "pasta" do CSV é na verdade um arquivo: mkdir falha com OSError
+    monkeypatch.setattr(api_main, "ARQ_LEITURAS_API", arquivo / "leituras_api.csv")
+    r = cliente.post("/leituras", json={"cidade": "Rio", "poluente": "MP10", "valor": 10})
+    assert r.status_code == 503 and r.json()["erro"] == "armazenamento_indisponivel"
 
 
 def test_rotas_de_consulta_seguem_o_contrato():

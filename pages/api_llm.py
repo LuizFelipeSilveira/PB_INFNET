@@ -69,6 +69,34 @@ with aba_api:
             st.error(f"Não foi possível falar com a API em {url_base} ({erro}). Ela está rodando?")
 
 # ---------------------------------------------------------------- LLM local (TP4)
+TIMEOUT_APP_S = 600  # maior que o limite da API (ETER_LLM_TIMEOUT_S) + a carga do modelo
+TITULOS_ERRO = {  # títulos amigáveis para os códigos de erro da API (api/erros.py)
+    "entrada_invalida": "O texto enviado não é válido",
+    "llm_dependencias_ausentes": "O modelo de linguagem não está instalado",
+    "llm_modelo_nao_encontrado": "O modelo de linguagem não foi baixado",
+    "llm_memoria_insuficiente": "Faltou memória na placa de vídeo",
+    "llm_falha_carga": "O modelo de linguagem não pôde ser carregado",
+    "llm_ocupado": "O modelo está ocupado com outro pedido",
+    "llm_tempo_esgotado": "O processamento demorou demais",
+    "resposta_invalida_do_modelo": "O modelo respondeu fora do formato esperado",
+}
+
+
+def mostrar_erro(resp, dados: dict) -> None:
+    """Mostra um erro da API (formato ErroAPI) de forma clara: o quê, por quê e o que fazer."""
+    codigo = dados.get("erro", f"http_{resp.status_code}")
+    titulo = TITULOS_ERRO.get(codigo, f"A API devolveu o erro {resp.status_code}")
+    st.error(f"**{titulo}.** {dados.get('mensagem', '')}")
+    for campo in dados.get("campos", []):
+        st.caption(f"• `{campo['campo']}`: {campo['mensagem']}")
+    if dados.get("sugestao"):
+        st.info(f"💡 {dados['sugestao']}")
+    if resp.headers.get("Retry-After"):
+        st.caption(f"Tente de novo em cerca de {resp.headers['Retry-After']} s.")
+    st.caption(f"Código `{codigo}` · status {resp.status_code} · "
+               f"id da requisição `{dados.get('id_requisicao', '-')}` (aparece no log da API)")
+
+
 with aba_local:
     st.markdown(
         "O texto é enviado para a rota `POST /processar_texto` da API, que o processa com um "
@@ -98,13 +126,24 @@ with aba_local:
     if enviar:
         with st.spinner("Processando... o primeiro pedido também carrega o modelo e pode "
                         "levar alguns minutos."):
+            resp = None
             try:
                 resp = requests.post(f"{url_llm}/processar_texto",
-                                     json={"texto": texto, "tarefa": tarefa}, timeout=900)
+                                     json={"texto": texto, "tarefa": tarefa}, timeout=TIMEOUT_APP_S)
+            except requests.ConnectionError:
+                st.error(f"A API não está respondendo em {url_llm}.")
+                st.info("Inicie a API em outro terminal com `uvicorn api.main:app` e tente de novo.")
+            except requests.Timeout:
+                st.error(f"A API não respondeu em {TIMEOUT_APP_S // 60} minutos.")
+                st.info("Na primeira chamada o modelo ainda está sendo carregado. Confira o "
+                        "terminal da API e tente de novo em instantes.")
             except requests.RequestException as erro:
-                st.error(f"Não foi possível falar com a API em {url_llm} ({erro}). Ela está rodando?")
-            else:
-                dados = resp.json()
+                st.error(f"Falha de comunicação com a API ({type(erro).__name__}).")
+            if resp is not None:
+                try:
+                    dados = resp.json()
+                except ValueError:  # resposta que não é JSON (ex.: proxy no meio do caminho)
+                    dados = {"mensagem": resp.text[:300]}
                 if resp.ok:
                     analise, meta = dados["analise"], dados["metadados"]
                     if analise["tipo"] == "sentimento":
@@ -127,10 +166,7 @@ with aba_local:
                     with st.expander("Ver o JSON completo devolvido pela API"):
                         st.json(dados)
                 else:
-                    # Todos os erros da API vêm no formato ErroAPI: {status, erro, mensagem, campos}
-                    st.error(f"**{dados.get('erro', 'erro')}** — {dados.get('mensagem', resp.text)}")
-                    for campo in dados.get("campos", []):
-                        st.caption(f"• `{campo['campo']}`: {campo['mensagem']}")
+                    mostrar_erro(resp, dados)
 
 # ---------------------------------------------------------------- LLM prep
 with aba_llm:
