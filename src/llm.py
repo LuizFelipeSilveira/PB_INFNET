@@ -1,0 +1,198 @@
+"""LLM local do Éter (TP4): carga do modelo e tarefas de linguagem natural.
+
+Tudo roda na máquina local com a biblioteca Transformers da Hugging Face, sem
+chamar nenhum serviço na nuvem. O modelo é baixado uma vez com
+`scripts/llm/baixar_modelo.py` para a pasta `modelos/`. Depois disso, ele é
+lido direto do disco e funciona sem internet.
+
+Usado por:
+  * api/main.py                    -> rota POST /processar_texto
+  * scripts/llm/avaliar_modelos.py -> comparação dos modelos candidatos
+
+Configuração por variáveis de ambiente (todas opcionais):
+  ETER_LLM_MODELO       repositório do Hugging Face (padrão: Qwen/Qwen3.5-2B)
+  ETER_LLM_DISPOSITIVO  "auto" (GPU se houver), "gpu" ou "cpu"
+  ETER_LLM_QUANT        "auto", "4bit", "fp16" ou "fp32" (auto: 4bit na GPU, fp32 na CPU)
+
+`torch` e `transformers` só são importados quando o modelo é carregado, para
+que o app Streamlit e o resto da API continuem funcionando sem eles.
+"""
+from __future__ import annotations
+
+import os
+import re
+import threading
+import time
+import unicodedata
+from pathlib import Path
+
+RAIZ = Path(__file__).resolve().parents[1]
+PASTA_MODELOS = RAIZ / "modelos"
+MODELO_PADRAO = "Qwen/Qwen3.5-2B"
+
+INSTRUCAO_SISTEMA = (
+    "Você é o assistente do Éter, um app brasileiro de qualidade do ar. "
+    "Responda sempre em português do Brasil, de forma curta e direta."
+)
+ROTULOS_SENTIMENTO = ("positivo", "negativo", "neutro")
+
+
+# ---------------------------------------------------------------- utilitários
+def sem_acento(texto: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFD", texto.lower())
+                   if unicodedata.category(c) != "Mn")
+
+
+def rotulo_sentimento(resposta: str) -> str | None:
+    """Extrai o rótulo da resposta do modelo. None se vier nenhum ou mais de um."""
+    achados = [r for r in ROTULOS_SENTIMENTO if r in sem_acento(resposta)]
+    return achados[0] if len(achados) == 1 else None
+
+
+def pasta_local(repo: str) -> Path:
+    """Onde `baixar_modelo.py` guarda o repositório (ex.: modelos/Qwen3.5-2B)."""
+    return PASTA_MODELOS / repo.split("/")[-1]
+
+
+def origem_do_modelo(repo: str) -> str:
+    """Usa a cópia em modelos/ se ela existir; senão, o nome do repositório (cache do HF)."""
+    local = pasta_local(repo)
+    return str(local) if (local / "config.json").exists() else repo
+
+
+# ---------------------------------------------------------------- carga e geração
+def carregar(repo: str, dispositivo: str = "auto", quant: str = "auto"):
+    """Carrega tokenizer e modelo. Devolve (tokenizer, modelo, descrição do formato)."""
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    usar_gpu = torch.cuda.is_available() and dispositivo != "cpu"
+    if dispositivo == "gpu" and not usar_gpu:
+        raise RuntimeError("ETER_LLM_DISPOSITIVO=gpu, mas o PyTorch não encontrou GPU CUDA.")
+    if quant == "auto":
+        quant = "4bit" if usar_gpu else "fp32"
+
+    origem = origem_do_modelo(repo)
+    tokenizer = AutoTokenizer.from_pretrained(origem)
+    if usar_gpu and quant == "4bit":
+        from transformers import BitsAndBytesConfig
+        config = BitsAndBytesConfig(
+            load_in_4bit=True, bnb_4bit_quant_type="nf4",
+            # Placas Pascal (GTX 10xx) não têm bfloat16: os cálculos ficam em float16.
+            bnb_4bit_compute_dtype=torch.float16,
+        )
+        modelo = AutoModelForCausalLM.from_pretrained(
+            origem, quantization_config=config, device_map={"": 0})
+    elif usar_gpu:
+        dtype = torch.float32 if quant == "fp32" else torch.float16
+        modelo = AutoModelForCausalLM.from_pretrained(origem, dtype=dtype, device_map={"": 0})
+    else:  # na CPU, float32 é o formato mais estável e rápido
+        quant = "fp32"
+        modelo = AutoModelForCausalLM.from_pretrained(origem, dtype=torch.float32)
+    modelo.eval()
+    return tokenizer, modelo, f"{quant}-{'gpu' if usar_gpu else 'cpu'}"
+
+
+def gerar(tokenizer, modelo, prompt: str, max_tokens: int = 160,
+          sistema: str = INSTRUCAO_SISTEMA) -> tuple[str, int, float]:
+    """Gera uma resposta. Devolve (texto, tokens gerados, segundos)."""
+    import torch
+
+    mensagens = [{"role": "system", "content": sistema},
+                 {"role": "user", "content": prompt}]
+    entradas = tokenizer.apply_chat_template(
+        mensagens, add_generation_prompt=True, return_tensors="pt", return_dict=True,
+        enable_thinking=False,  # sem "modo raciocínio": respostas diretas e mais rápidas
+    ).to(modelo.device)
+    inicio = time.perf_counter()
+    with torch.no_grad():
+        # do_sample=False (decodificação gulosa): mesma entrada -> mesma saída
+        saida = modelo.generate(**entradas, max_new_tokens=max_tokens, do_sample=False,
+                                pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id)
+    duracao = time.perf_counter() - inicio
+    novos = saida[0][entradas["input_ids"].shape[-1]:]
+    texto = tokenizer.decode(novos, skip_special_tokens=True)
+    texto = re.sub(r"<think>.*?</think>", "", texto, flags=re.S).strip()
+    return texto, len(novos), duracao
+
+
+# ---------------------------------------------------------------- tarefas do app
+def _contexto_iqar(pergunta: str) -> str:
+    """Trechos da tabela oficial para a tarefa 'pergunta' (só os poluentes citados, se houver)."""
+    import pandas as pd
+
+    from src import data_loader as dl
+
+    tabela = dl.ler_csv(dl.ARQ_IQAR)
+    if tabela is None:
+        return ""
+    # "pm 2,5" -> "MP2.5"; a busca exige a sigla isolada ("CO" não casa com "COMO" nem "CO2")
+    pergunta_norm = re.sub(r"(\d),(\d)", r"\1.\2",
+                           dl.normalizar_poluente(pergunta).replace("MP ", "MP"))
+    citados = [p for p in tabela["poluente"].unique()
+               if re.search(rf"(?<![A-Z0-9]){re.escape(p)}(?![A-Z0-9]|\.\d)", pergunta_norm)]
+    if citados:
+        tabela = tabela[tabela["poluente"].isin(citados)]
+    linhas = []
+    for r in tabela.itertuples():
+        teto = f"{r.conc_max:g}" if pd.notna(r.conc_max) else "sem limite"
+        linhas.append(f"- {r.poluente}, {r.categoria} (índice {r.indice_min}–{r.indice_max}): "
+                      f"de {r.conc_min:g} a {teto} {r.unidade}")
+    return "\n".join(linhas)
+
+
+def montar_prompt(tarefa: str, texto: str) -> tuple[str, int]:
+    """Devolve (prompt, limite de tokens) para cada tarefa suportada pela API."""
+    if tarefa == "resumo":
+        return (f"Resuma o texto abaixo em no máximo duas frases.\n\nTexto:\n{texto}", 120)
+    if tarefa == "sentimento":
+        return ("Classifique o sentimento do texto abaixo como positivo, negativo ou neutro. "
+                f"Responda com uma única palavra.\n\nTexto:\n{texto}", 5)
+    if tarefa == "pergunta":
+        return ("Responda à pergunta usando somente a tabela oficial do IQAr abaixo. Se a "
+                "resposta não estiver na tabela, diga que não sabe.\n\n"
+                f"Tabela:\n{_contexto_iqar(texto)}\n\nPergunta: {texto}", 150)
+    raise ValueError(f"Tarefa desconhecida: {tarefa}")
+
+
+class LLMLocal:
+    """Mantém UM modelo carregado na memória e atende um pedido por vez.
+
+    A carga só acontece no primeiro uso (leva de segundos a alguns minutos).
+    O cadeado (`threading.Lock`) evita que dois pedidos simultâneos gerem texto
+    ao mesmo tempo na mesma GPU, o que estouraria a memória de uma placa de 4 GB.
+    """
+
+    def __init__(self) -> None:
+        self.repo = os.getenv("ETER_LLM_MODELO", MODELO_PADRAO)
+        self.dispositivo = os.getenv("ETER_LLM_DISPOSITIVO", "auto")
+        self.quant = os.getenv("ETER_LLM_QUANT", "auto")
+        self._tokenizer = self._modelo = None
+        self.formato: str | None = None
+        self.tempo_carga_s: float | None = None
+        self._cadeado = threading.Lock()
+
+    @property
+    def carregado(self) -> bool:
+        return self._modelo is not None
+
+    def status(self) -> dict:
+        return {"modelo": self.repo, "origem": origem_do_modelo(self.repo),
+                "carregado": self.carregado, "formato": self.formato,
+                "tempo_carga_s": self.tempo_carga_s}
+
+    def _garantir_carregado(self) -> None:
+        if self._modelo is None:
+            inicio = time.perf_counter()
+            self._tokenizer, self._modelo, self.formato = carregar(
+                self.repo, self.dispositivo, self.quant)
+            self.tempo_carga_s = round(time.perf_counter() - inicio, 1)
+
+    def processar(self, tarefa: str, texto: str) -> dict:
+        prompt, max_tokens = montar_prompt(tarefa, texto)
+        with self._cadeado:
+            self._garantir_carregado()
+            resposta, n_tokens, segundos = gerar(self._tokenizer, self._modelo, prompt, max_tokens)
+        return {"resultado": resposta,
+                "sentimento": rotulo_sentimento(resposta) if tarefa == "sentimento" else None,
+                "tokens_gerados": n_tokens, "tempo_s": round(segundos, 2)}

@@ -1,15 +1,18 @@
-"""Página: API (FastAPI) e preparação dos dados para LLMs — entregas do TP3."""
+"""Página: API (FastAPI), LLM local (TP4) e preparação dos dados para LLMs (TP3)."""
 from __future__ import annotations
 
 import pandas as pd
 import requests
 import streamlit as st
 
+from src import data_loader as dl
+from src import state
 from src.llm_prep import montar_corpus, resumo_corpus, salvar_corpus
 
 st.title("🤖 API & preparação para IA")
 
-aba_api, aba_llm = st.tabs(["🔌 API (FastAPI)", "🧠 Preparação para LLMs"])
+aba_api, aba_local, aba_llm = st.tabs(
+    ["🔌 API (FastAPI)", "💬 LLM local", "🧠 Preparação para LLMs"])
 
 # ---------------------------------------------------------------- API
 with aba_api:
@@ -27,10 +30,12 @@ with aba_api:
         {"Método": "GET", "Rota": "/iqar/calcular", "Função": "Calcula o IQAr de uma concentração pontual."},
         {"Método": "GET", "Rota": "/leituras", "Função": "Lista leituras já registradas via POST."},
         {"Método": "POST", "Rota": "/leituras", "Função": "Registra uma nova leitura (sensor, estação, relatório manual)."},
+        {"Método": "POST", "Rota": "/processar_texto", "Função": "Resumo, sentimento ou pergunta com o LLM local (TP4)."},
+        {"Método": "GET", "Rota": "/llm/status", "Função": "Modelo configurado e se já está carregado."},
     ]), hide_index=True, width="stretch")
 
     st.markdown("##### Testar a API a partir desta página")
-    url_base = st.text_input("Endereço da API", "http://127.0.0.1:8000")
+    url_base = st.text_input("Endereço da API", "http://127.0.0.1:8000", key="url_base")
 
     c1, c2, c3 = st.columns(3)
     pol = c1.selectbox("Poluente", ["MP2.5", "MP10", "O3", "NO2", "SO2", "CO"], key="api_pol")
@@ -62,6 +67,55 @@ with aba_api:
                 st.error(resp.json())
         except requests.RequestException as erro:
             st.error(f"Não foi possível falar com a API em {url_base} ({erro}). Ela está rodando?")
+
+# ---------------------------------------------------------------- LLM local (TP4)
+with aba_local:
+    st.markdown(
+        "O texto é enviado para a rota `POST /processar_texto` da API, que o processa com um "
+        "modelo de linguagem do Hugging Face rodando **nesta máquina** (biblioteca Transformers, "
+        "sem nenhum serviço na nuvem). Veja a escolha do modelo em `docs/model/ModelSelection.md`."
+    )
+    url_llm = st.session_state.get("url_base", "http://127.0.0.1:8000")
+    tarefas = {"Resumo": "resumo", "Sentimento": "sentimento",
+               "Pergunta sobre a tabela IQAr": "pergunta"}
+    rotulo = st.radio("Tarefa", list(tarefas), horizontal=True)
+    tarefa = tarefas[rotulo]
+
+    sugestao = ""
+    noticias = state.carregar_csv(str(dl.ARQ_NOTICIAS), state.mtime(dl.ARQ_NOTICIAS))
+    if tarefa == "pergunta":
+        sugestao = "Qual é a faixa de concentração de MP2.5 para a qualidade do ar ruim?"
+    elif noticias is not None and not noticias.empty:
+        escolha = st.selectbox("Usar uma notícia coletada (opcional)",
+                               ["(digitar meu próprio texto)"] + noticias["titulo"].head(30).tolist())
+        if escolha != "(digitar meu próprio texto)":
+            linha = noticias[noticias["titulo"] == escolha].iloc[0]
+            sugestao = escolha if tarefa == "sentimento" else str(linha["resumo"])
+
+    with st.form("form_llm"):
+        texto = st.text_area("Texto", sugestao, height=150, max_chars=4000)
+        enviar = st.form_submit_button("Processar com o LLM local", type="primary")
+    if enviar:
+        with st.spinner("Processando... o primeiro pedido também carrega o modelo e pode "
+                        "levar alguns minutos."):
+            try:
+                resp = requests.post(f"{url_llm}/processar_texto",
+                                     json={"texto": texto, "tarefa": tarefa}, timeout=900)
+            except requests.RequestException as erro:
+                st.error(f"Não foi possível falar com a API em {url_llm} ({erro}). Ela está rodando?")
+            else:
+                if resp.ok:
+                    dados = resp.json()
+                    if dados.get("sentimento"):
+                        icones = {"positivo": "🟢", "negativo": "🔴", "neutro": "⚪"}
+                        st.metric("Sentimento", f"{icones[dados['sentimento']]} {dados['sentimento']}")
+                    st.success(dados["resultado"])
+                    st.caption(f"{dados['modelo']} · {dados['formato']} · "
+                               f"{dados['tokens_gerados']} tokens em {dados['tempo_s']} s")
+                elif resp.status_code == 422:
+                    st.warning("O texto precisa ter entre 3 e 4.000 caracteres.")
+                else:
+                    st.error(resp.json().get("detail", resp.text))
 
 # ---------------------------------------------------------------- LLM prep
 with aba_llm:

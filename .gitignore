@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 venv/
 .ipynb_checkpoints/
+.pytest_cache/
 
 # Segredos (NUNCA versionar a chave da API)
 .streamlit/secrets.toml
@@ -18,3 +19,6 @@ Thumbs.db
 # Dados intermediários grandes (mantém a estrutura das pastas)
 data/processed/*
 !data/processed/.gitkeep
+
+# Modelos de linguagem baixados localmente (TP4, alguns GB)
+modelos/

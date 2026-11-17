@@ -15,7 +15,8 @@ eter/
 │   ├── monitor.py, noticias.py, referencia.py, dados.py, api_llm.py, sobre.py
 ├── api/                          # Deployment: API HTTP independente (FastAPI)
 │   ├── main.py                   #   rotas (GET /iqar/tabela, /iqar/calcular, /cidades,
-│   │                              #        GET+POST /leituras)
+│   │                              #        GET+POST /leituras, POST /processar_texto,
+│   │                              #        GET /llm/status)
 │   └── schemas.py                #   modelos Pydantic de entrada/saída
 ├── src/                          # Código reutilizável (usado pelo app E pela API)
 │   ├── iqar.py                   #   cálculo do IQAr e recomendações
@@ -23,12 +24,16 @@ eter/
 │   ├── data_loader.py            #   leitura de dados e validação de uploads
 │   ├── state.py                  #   sessão e cache compartilhados entre páginas
 │   ├── ui.py                     #   componentes visuais compartilhados
-│   └── llm_prep.py               #   Modeling: consolida o corpus para a próxima entrega (LLM)
+│   ├── llm_prep.py               #   Modeling: consolida o corpus para os LLMs
+│   └── llm.py                    #   Modeling: carrega o LLM local e executa as tarefas (TP4)
 ├── scripts/
 │   ├── scraping/                 # Data Acquisition: coletores com Beautiful Soup (+ Selenium
 │   │   ├── scrape_iqar.py        #   para a página da CETESB — ver Charter §6)
 │   │   └── scrape_noticias.py
-│   └── prepare_corpus.py         # gera data/processed/corpus_llm.jsonl
+│   ├── prepare_corpus.py         # gera data/processed/corpus_llm.jsonl
+│   └── llm/                      # Modeling (TP4)
+│       ├── baixar_modelo.py      #   baixa o modelo do Hugging Face para modelos/
+│       └── avaliar_modelos.py    #   compara os candidatos (velocidade, memória, acerto)
 ├── data/
 │   ├── raw/                      #   saídas dos scrapers (CSV/TXT)
 │   ├── processed/                #   corpus_llm.jsonl, leituras_api.csv (não versionados)
@@ -36,9 +41,13 @@ eter/
 ├── notebooks/                    # Data Understanding: análises exploratórias
 ├── docs/
 │   ├── project/Charter.md        # Business Understanding
-│   └── data_report/DataSummaryReport.md
+│   ├── data_report/DataSummaryReport.md
+│   └── model/ModelSelection.md   # Modeling: escolha e justificativa do LLM local
+├── modelos/                      # pesos do LLM baixados localmente (não versionados)
+├── tests/                        # pytest (rota /processar_texto com LLM falso)
 ├── .streamlit/                   # tema e segredos (exemplo)
-└── requirements.txt
+├── requirements.txt
+└── requirements-llm.txt          # PyTorch/Transformers só para a parte de LLM (TP4)
 ```
 
 ## Como rodar localmente
@@ -77,6 +86,29 @@ Sugestão de fluxo: uma branch por funcionalidade (`git checkout -b feat/upload-
 pequenos com prefixos (`feat:`, `fix:`, `docs:`, `data:`) e merge na `main` via pull request.
 O `.gitignore` já impede que `secrets.toml` seja enviado.
 
+### LLM local (TP4, opcional)
+
+A rota `POST /processar_texto` resume textos, classifica sentimento e responde perguntas sobre a
+tabela do IQAr com um modelo do Hugging Face rodando **na sua máquina** (sem nuvem). A escolha
+do modelo e a instalação para GPUs antigas (ex.: GTX 1050 Ti) estão em
+`docs/model/ModelSelection.md`.
+
+```bash
+# depois de instalar o PyTorch (ver docs/model/ModelSelection.md, seção 5)
+pip install -r requirements-llm.txt
+python scripts/llm/baixar_modelo.py            # uma vez: baixa para modelos/
+uvicorn api.main:app                           # o 1º pedido carrega o modelo
+```
+
+Exemplo de chamada:
+
+```bash
+curl -X POST http://127.0.0.1:8000/processar_texto -H "Content-Type: application/json" \
+     -d '{"texto": "Fumaça deixa o ar de Manaus péssimo", "tarefa": "sentimento"}'
+```
+
+No app, a aba **API & IA → LLM local** faz o mesmo com um formulário. Testes: `pytest -q`.
+
 ## Deploy (Streamlit Community Cloud)
 
 1. Envie o repositório ao GitHub.
@@ -93,7 +125,8 @@ O `.gitignore` já impede que `secrets.toml` seja enviado.
 | Web scraping (Beautiful Soup + Selenium) | `scripts/scraping/` → `data/raw/*.csv` e `*.txt` (Selenium só para a CETESB, ver Charter §6) |
 | Nuvem de palavras e estatísticas | Página **Notícias e palavras** |
 | API própria (FastAPI) | `api/main.py`: `GET /cidades`, `GET /iqar/tabela`, `GET /iqar/calcular`, `GET`+`POST /leituras` |
-| Preparação para LLM (próxima entrega) | `src/llm_prep.py` → `data/processed/corpus_llm.jsonl`; visão geral na página **API & IA** |
+| Preparação para LLM | `src/llm_prep.py` → `data/processed/corpus_llm.jsonl`; visão geral na página **API & IA** |
+| LLM local + FastAPI (TP4) | `src/llm.py` + `POST /processar_texto` (resumo, sentimento, pergunta); escolha do modelo em `docs/model/ModelSelection.md` |
 | Cache | `@st.cache_data` em `src/state.py` (API OpenWeather, leitura de arquivos, nuvem de palavras) |
 | Estado de sessão | Histórico de consultas, última avaliação, dados enviados, arquivos já importados |
 | Upload/Download | Página **Meus dados**: modelo CSV, upload múltiplo validado, download com IQAr calculado |

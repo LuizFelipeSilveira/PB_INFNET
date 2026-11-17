@@ -136,9 +136,14 @@ pip install "torch<2.15" --index-url https://download.pytorch.org/whl/cu126
 # 4. Confira: deve imprimir True e (6, 1)
 python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_capability())"
 
-# 5. Instale o restante (Transformers, bitsandbytes etc.) e as dependências do projeto
+# 5. Instale o restante (Transformers, bitsandbytes etc.) e as dependências do projeto.
+#    Rode um comando por vez e só DEPOIS do passo 4: se o PyTorch ainda não estiver
+#    instalado, o pip baixa a versão padrão, que no Windows só usa a CPU.
 pip install -r requirements-llm.txt
 pip install -r requirements.txt
+
+# 6. Baixe o modelo para a pasta modelos/ (uma vez só, ~4–5 GB)
+python scripts/llm/baixar_modelo.py
 ```
 
 Se o passo 4 imprimir `False`, ou se aparecer o aviso *"sm_61 is not compatible with the current
@@ -162,7 +167,34 @@ reproduzível.
 python scripts/llm/avaliar_modelos.py
 ```
 
-Resultados (preencher com `data/processed/avaliacao_llm/resumo.csv`):
+### Rodada 1: CPU (float32)
+
+Na primeira execução, o PyTorch instalado era a versão padrão do PyPI, que no Windows só usa o
+processador. Os três modelos rodaram na CPU. Mesmo assim, a rodada serve como medida do pior caso
+(máquina sem GPU compatível):
+
+| Modelo | Formato | Carga (s) | Tokens/s | RAM do processo (GB) | Acerto sentimento | Acerto Q&A |
+|---|---|---|---|---|---|---|
+| Qwen3.5-2B | FP32 / CPU | 160,8 | 1,4 | 7,59 | 0,67 (4/6) | 1,00 (3/3) |
+| Qwen3.5-0.8B | FP32 / CPU | 65,1 | 3,2 | 3,37 | 0,67 (4/6) | 1,00 (3/3) |
+| Qwen3-1.7B | FP32 / CPU | 115,9 | 1,6 | 7,14 | 0,50 (3/6) | 1,00 (3/3) |
+
+Leitura:
+
+- **Q&A com contexto:** os três acertaram todas as perguntas. Quando o trecho da tabela vai no
+  *prompt*, até o menor modelo localiza e devolve a faixa correta. Isso favorece a estratégia de
+  sempre enviar o contexto (como faz a rota `POST /processar_texto`).
+- **Sentimento:** os dois Qwen3.5 empataram (4 de 6) e o Qwen3-1.7B ficou atrás (3 de 6). Com só
+  6 frases, um acerto a mais ou a menos muda a taxa em 17 pontos. O teste não separa o 2B do
+  0,8B nesse critério.
+- **Custo na CPU:** o 0,8B é 2,3 vezes mais rápido que o 2B (3,2 contra 1,4 tokens/s), carrega
+  em menos da metade do tempo e usa menos da metade da RAM. Um resumo de 120 tokens levaria
+  cerca de 40 s no 0,8B e cerca de 85 s no 2B.
+- **Qwen3-1.7B:** é mais lento e usa mais memória que o 0,8B, e acertou menos. Fica descartado.
+
+### Rodada 2: GPU (GTX 1050 Ti, NF4 4 bits)
+
+*A preencher depois de reinstalar o PyTorch na variante `cu126` (seção 5).*
 
 | Modelo | Formato | Carga (s) | Tokens/s | VRAM de pico (GB) | Acerto sentimento | Acerto Q&A |
 |---|---|---|---|---|---|---|
@@ -184,11 +216,49 @@ Avaliação manual do resumo e do boletim (arquivos `<modelo>.json`): *a preench
 - **Acessibilidade:** download livre no Hugging Face, licença Apache 2.0, carregamento direto com
   Transformers e execução offline.
 
-**Plano B:** se a avaliação local mostrar velocidade insuficiente ou falta de memória, o projeto
-usa o `Qwen/Qwen3.5-0.8B` em FP16, sem quantização. Se o Qwen3.5-2B errar muito o formato pedido
-na classificação, a alternativa é o `Qwen/Qwen3-1.7B`, mais disciplinado no IFEval.
+**Plano B, confirmado pela rodada 1:** sem GPU, o projeto usa o `Qwen/Qwen3.5-0.8B`. Na CPU,
+ele teve o mesmo acerto do 2B e foi 2,3 vezes mais rápido. A troca não exige mudar código, só a
+variável de ambiente `ETER_LLM_MODELO` (seção 9). O `Qwen/Qwen3-1.7B` foi descartado.
 
-## 8. Referências
+## 8. Integração com a API (FastAPI)
+
+O modelo escolhido é servido pela API do projeto, sem nenhum serviço externo:
+
+| Arquivo | Papel |
+|---|---|
+| `scripts/llm/baixar_modelo.py` | baixa o modelo uma vez para `modelos/<nome>` (fora do Git) |
+| `src/llm.py` | carrega o modelo com Transformers (4 bits na GPU, FP32 na CPU), monta os *prompts* e gera o texto |
+| `api/main.py` | `POST /processar_texto` (tarefas `resumo`, `sentimento`, `pergunta`) e `GET /llm/status` |
+| `pages/api_llm.py` | aba **LLM local** do app: envia texto (ou uma notícia coletada) para a rota |
+| `tests/test_processar_texto.py` | testes da rota com um LLM falso (`pytest -q`) |
+
+Decisões de implementação:
+
+- **Carga preguiçosa e única:** o modelo é carregado no primeiro pedido e fica na memória. Os
+  pedidos seguintes respondem sem recarregar.
+- **Um pedido por vez:** um cadeado (`threading.Lock`) evita que duas gerações simultâneas
+  estourem os 4 GB da placa.
+- **Rota síncrona (`def`):** o FastAPI executa a geração numa thread separada, então as outras
+  rotas continuam respondendo enquanto o modelo trabalha.
+- **Decodificação gulosa (`do_sample=False`):** o mesmo texto gera sempre a mesma resposta,
+  o que é desejável para classificação e facilita os testes.
+- **Offline de verdade:** se `modelos/<nome>` existe, o Transformers lê dali e não acessa a
+  internet. Para garantir isso também com o cache do Hugging Face, defina
+  `HF_HUB_OFFLINE=1` antes de subir a API.
+- **API funciona sem o LLM:** `torch` e `transformers` só são importados no primeiro pedido.
+  Sem eles, as outras rotas funcionam normalmente e `/processar_texto` responde `503` com
+  instruções.
+
+## 9. Configuração
+
+| Variável | Padrão | Uso |
+|---|---|---|
+| `ETER_LLM_MODELO` | `Qwen/Qwen3.5-2B` | troca o modelo (ex.: `Qwen/Qwen3.5-0.8B` numa máquina sem GPU) |
+| `ETER_LLM_DISPOSITIVO` | `auto` | `gpu` ou `cpu` para forçar |
+| `ETER_LLM_QUANT` | `auto` | `4bit`, `fp16` ou `fp32` (auto: 4 bits na GPU, FP32 na CPU) |
+| `HF_HUB_OFFLINE` | (vazio) | `1` impede qualquer acesso ao Hugging Face |
+
+## 10. Referências
 
 - Qwen Team. *Qwen3.5-2B* (model card, benchmarks e arquitetura). https://huggingface.co/Qwen/Qwen3.5-2B
 - Qwen Team. *Qwen3.5-0.8B* (model card). https://huggingface.co/Qwen/Qwen3.5-0.8B

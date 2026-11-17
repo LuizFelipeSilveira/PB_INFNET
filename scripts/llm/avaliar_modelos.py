@@ -27,7 +27,6 @@ import platform
 import re
 import sys
 import time
-import unicodedata
 from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parents[2]
@@ -36,6 +35,7 @@ sys.path.append(str(RAIZ))
 import pandas as pd  # noqa: E402
 
 from src import data_loader as dl  # noqa: E402
+from src.llm import carregar, gerar, rotulo_sentimento  # noqa: E402
 
 PASTA_SAIDA = dl.DATA_RAW.parent / "processed" / "avaliacao_llm"
 
@@ -48,11 +48,6 @@ CANDIDATOS = {
     "qwen3-1.7b": {"repo": "Qwen/Qwen3-1.7B", "quant": "4bit"},
 }
 
-INSTRUCAO_SISTEMA = (
-    "Você é o assistente do Éter, um app brasileiro de qualidade do ar. "
-    "Responda sempre em português do Brasil, de forma curta e direta."
-)
-
 # Frases curtas com rótulo conhecido, escritas para este teste (não vêm do scraping),
 # para medir acerto de forma objetiva.
 SENTIMENTO = [
@@ -63,11 +58,6 @@ SENTIMENTO = [
     ("Nova frota de ônibus elétricos reduz emissões e melhora o ar no centro", "positivo"),
     ("Prefeitura instala nova estação de monitoramento do ar no bairro", "neutro"),
 ]
-
-
-def _sem_acento(texto: str) -> str:
-    return "".join(c for c in unicodedata.normalize("NFD", texto.lower())
-                   if unicodedata.category(c) != "Mn")
 
 
 # ---------------------------------------------------------------- tarefas
@@ -123,10 +113,8 @@ def montar_tarefas() -> list[dict]:
 
 def conferir(tarefa: dict, resposta: str) -> bool | None:
     """Confere automaticamente as tarefas com gabarito; None = avaliação manual."""
-    texto = _sem_acento(resposta)
     if tarefa["tipo"] == "sentimento":
-        achados = [r for r in ("positivo", "negativo", "neutro") if r in texto]
-        return achados == [tarefa["esperado"]]
+        return rotulo_sentimento(resposta) == tarefa["esperado"]
     if tarefa["tipo"] == "qa":
         # Compara como número, para aceitar "25", "25,0" ou "25.0".
         numeros = {float(n.replace(",", ".")) for n in re.findall(r"\d+(?:[.,]\d+)?", resposta)}
@@ -150,49 +138,6 @@ def relatorio_ambiente(torch) -> dict:
     return info
 
 
-def carregar(cfg: dict, usar_gpu: bool):
-    import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-
-    tokenizer = AutoTokenizer.from_pretrained(cfg["repo"])
-    if usar_gpu and cfg["quant"] == "4bit":
-        from transformers import BitsAndBytesConfig
-        quant = BitsAndBytesConfig(
-            load_in_4bit=True, bnb_4bit_quant_type="nf4",
-            # A 1050 Ti (Pascal) não tem bfloat16: os cálculos ficam em float16.
-            bnb_4bit_compute_dtype=torch.float16,
-        )
-        modelo = AutoModelForCausalLM.from_pretrained(
-            cfg["repo"], quantization_config=quant, device_map={"": 0})
-    elif usar_gpu:
-        modelo = AutoModelForCausalLM.from_pretrained(
-            cfg["repo"], dtype=torch.float16, device_map={"": 0})
-    else:  # CPU: float32 é o formato mais estável e rápido no processador
-        modelo = AutoModelForCausalLM.from_pretrained(cfg["repo"], dtype=torch.float32)
-    modelo.eval()
-    return tokenizer, modelo
-
-
-def gerar(tokenizer, modelo, prompt: str, max_tokens: int) -> tuple[str, int, float]:
-    import torch
-
-    mensagens = [{"role": "system", "content": INSTRUCAO_SISTEMA},
-                 {"role": "user", "content": prompt}]
-    entradas = tokenizer.apply_chat_template(
-        mensagens, add_generation_prompt=True, return_tensors="pt", return_dict=True,
-        enable_thinking=False,  # sem "modo raciocínio": respostas diretas e mais rápidas
-    ).to(modelo.device)
-    inicio = time.perf_counter()
-    with torch.no_grad():
-        saida = modelo.generate(**entradas, max_new_tokens=max_tokens, do_sample=False,
-                                pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id)
-    duracao = time.perf_counter() - inicio
-    novos = saida[0][entradas["input_ids"].shape[-1]:]
-    texto = tokenizer.decode(novos, skip_special_tokens=True)
-    texto = re.sub(r"<think>.*?</think>", "", texto, flags=re.S).strip()
-    return texto, len(novos), duracao
-
-
 def avaliar_modelo(nome: str, cfg: dict, tarefas: list[dict], usar_gpu: bool,
                    max_tokens: int) -> dict:
     import torch
@@ -209,7 +154,8 @@ def avaliar_modelo(nome: str, cfg: dict, tarefas: list[dict], usar_gpu: bool,
 
     inicio = time.perf_counter()
     try:
-        tokenizer, modelo = carregar(cfg, usar_gpu)
+        tokenizer, modelo, _ = carregar(cfg["repo"], "gpu" if usar_gpu else "cpu",
+                                        cfg["quant"] if usar_gpu else "fp32")
     except Exception as erro:  # sem memória, sem internet, biblioteca faltando...
         print(f"  ! Não foi possível carregar: {erro}")
         return {"modelo": nome, "repo": cfg["repo"], "erro": str(erro)[:300]}

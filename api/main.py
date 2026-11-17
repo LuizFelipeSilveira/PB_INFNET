@@ -28,17 +28,25 @@ from src import data_loader as dl  # noqa: E402
 from src.api import CIDADES  # noqa: E402
 from src.iqar import RECOMENDACOES, calcular_indice, categoria  # noqa: E402
 
+from src.llm import LLMLocal  # noqa: E402
+
 from api.schemas import (  # noqa: E402
     Cidade,
     FaixaReferencia,
     LeituraRegistrada,
     NovaLeitura,
+    PedidoTexto,
     ResultadoIQAr,
+    ResultadoTexto,
+    StatusLLM,
 )
 
 ARQ_LEITURAS_API = dl.DATA_RAW.parent / "processed" / "leituras_api.csv"
 COLUNAS_LEITURAS_API = ["cidade", "poluente", "valor", "data", "origem",
                         "recebido_em", "iqar", "categoria"]
+
+# Um único modelo para a API inteira, carregado no primeiro pedido (ver src/llm.py).
+llm = LLMLocal()
 
 app = FastAPI(
     title="Éter API",
@@ -161,3 +169,35 @@ def registrar_leitura(leitura: NovaLeitura) -> LeituraRegistrada:
         recebido_em=datetime.fromisoformat(registro["recebido_em"]),
         iqar=idx, categoria=registro["categoria"],
     )
+
+
+# ---------------------------------------------------------------- LLM local (TP4)
+def _llm_indisponivel(erro: Exception) -> HTTPException:
+    return HTTPException(503, f"O modelo de linguagem local não pôde ser carregado ({erro}). "
+                              "Instale as dependências de requirements-llm.txt e baixe o modelo "
+                              "com scripts/llm/baixar_modelo.py.")
+
+
+@app.get("/llm/status", response_model=StatusLLM, tags=["llm"])
+def status_llm() -> StatusLLM:
+    """GET — informa qual modelo está configurado e se já foi carregado na memória."""
+    return StatusLLM(**llm.status())
+
+
+@app.post("/processar_texto", response_model=ResultadoTexto, tags=["llm"])
+def processar_texto(pedido: PedidoTexto) -> ResultadoTexto:
+    """POST — processa um texto com o LLM que roda **localmente** (Transformers, sem nuvem).
+
+    Tarefas: `resumo`, `sentimento` (positivo/negativo/neutro) e `pergunta` (responde
+    usando a tabela oficial do IQAr como contexto).
+
+    O primeiro pedido carrega o modelo e pode levar de segundos a alguns minutos; os
+    seguintes reaproveitam o modelo já carregado. A rota é síncrona (`def`, não
+    `async def`): o FastAPI a executa numa thread separada, então a geração, que é
+    pesada, não trava as outras rotas da API.
+    """
+    try:
+        saida = llm.processar(pedido.tarefa, pedido.texto)
+    except (ImportError, OSError, RuntimeError) as erro:
+        raise _llm_indisponivel(erro) from erro
+    return ResultadoTexto(tarefa=pedido.tarefa, modelo=llm.repo, formato=llm.formato, **saida)
