@@ -146,3 +146,13 @@ def test_pergunta_sem_poluente_usa_tabela_toda():
     prompt, _ = montar_prompt("pergunta", "Como o índice é dividido em categorias?")
     for sigla in ("MP10", "MP2.5", "O3", "CO", "NO2", "SO2"):
         assert f"- {sigla}," in prompt
+
+
+def test_contexto_separa_concentracao_e_indice():
+    # Pergunta sobre concentração: nenhuma faixa de índice no contexto (confundia o modelo 0,8B)
+    prompt, _ = montar_prompt("pergunta", "Qual a faixa de O3 para qualidade ruim?")
+    assert "- O3, Ruim: de 130 a 160 µg/m³" in prompt
+    assert "índice de" not in prompt
+    # Pergunta sobre o índice: as faixas do índice vêm num bloco separado
+    prompt, _ = montar_prompt("pergunta", "Qual o índice da categoria Ruim para O3?")
+    assert "- Ruim: índice de 81 a 120" in prompt

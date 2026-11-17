@@ -149,12 +149,19 @@ def contexto_iqar(pergunta: str) -> tuple[str, list[str]]:
     citados = poluentes_citados(pergunta)
     if citados:
         tabela = tabela[tabela["poluente"].isin(citados)]
+    # Só concentrações em cada linha. Na rodada 3, com "(índice 41–80)" na mesma linha,
+    # o modelo de 0,8B respondia a faixa do índice em vez da concentração (1 de 3 certas).
     linhas = []
     for r in tabela.itertuples():
         faixa = (f"de {r.conc_min:g} a {r.conc_max:g}" if pd.notna(r.conc_max)
                  else f"acima de {r.conc_min:g}")
-        linhas.append(f"- {r.poluente}, {r.categoria} (índice {r.indice_min}–{r.indice_max}): "
-                      f"{faixa} {r.unidade}")
+        linhas.append(f"- {r.poluente}, {r.categoria}: {faixa} {r.unidade}")
+    # As faixas do índice entram num bloco separado, só se a pergunta for sobre o índice.
+    if re.search(r"\b(índice|indice|iqar)\b", pergunta, flags=re.I):
+        faixas = tabela.drop_duplicates("categoria")
+        linhas.append("\nFaixas do índice IQAr (as mesmas para todos os poluentes):")
+        linhas += [f"- {r.categoria}: índice de {r.indice_min} a {r.indice_max}"
+                   for r in faixas.itertuples()]
     return "\n".join(linhas), list(dict.fromkeys(tabela["poluente"]))
 
 

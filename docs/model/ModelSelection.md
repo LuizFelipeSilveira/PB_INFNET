@@ -251,8 +251,18 @@ A partir dos erros da rodada 2:
   maior.
 - **Q&A:** o 0,8B caiu de 100% para 33%. A única mudança nessa tarefa foi o *prompt*, que
   passou a ser o mesmo da API e acrescenta as faixas do índice ("índice 41–80") ao lado das
-  faixas de concentração. *Diagnóstico em andamento:* a hipótese é que o modelo menor confunde
-  os dois conjuntos de números. O 2B não teve esse problema.
+  faixas de concentração. **Diagnóstico:** nas duas perguntas que errou, o 0,8B respondeu a
+  faixa do índice no lugar da concentração (ex.: "Índice 81–120" para O3 "Ruim", quando o certo
+  era 130 a 160 µg/m³). O 2B separou os dois números sem erro.
+- **Correção (`contexto_iqar` em `src/llm.py`):** cada linha do contexto volta a ter só a
+  concentração, como na rodada 2. As faixas do índice entram num bloco separado e só quando a
+  pergunta é sobre o índice.
+
+### Rodada 4: contexto de Q&A corrigido (a preencher)
+
+| Modelo | Formato | Tokens/s | Acerto sentimento (12) | Acerto Q&A (3) |
+|---|---|---|---|---|
+| Qwen3.5-0.8B | FP16 | | | |
 
 ## 7. Decisão
 
