@@ -210,7 +210,10 @@ def registrar_leitura(leitura: NovaLeitura) -> LeituraRegistrada:
     }
 
     df = _carregar_leituras()
-    df = pd.concat([df, pd.DataFrame([registro])], ignore_index=True)
+    novo = pd.DataFrame([registro])
+    # Na primeira leitura não há o que juntar; concatenar com uma tabela vazia gera
+    # FutureWarning no pandas (o comportamento com tabelas vazias vai mudar).
+    df = novo if df.empty else pd.concat([df, novo], ignore_index=True)
     try:
         ARQ_LEITURAS_API.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(ARQ_LEITURAS_API, index=False)
