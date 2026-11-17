@@ -1,0 +1,12 @@
+# Dependências da etapa de LLM local (TP4), separadas do requirements.txt para
+# não pesar o deploy do app no Streamlit Community Cloud.
+# Instalação em placas NVIDIA GTX 10xx (Pascal, ex.: GTX 1050 Ti): ver
+# docs/model/ModelSelection.md, seção 5. Instale o PyTorch ANTES deste arquivo.
+#
+#   pip install "torch<2.15" --index-url https://download.pytorch.org/whl/cu126
+#   pip install -r requirements-llm.txt
+
+transformers>=5.0
+accelerate>=1.0
+bitsandbytes>=0.45
+psutil>=5.9
