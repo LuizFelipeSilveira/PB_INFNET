@@ -33,8 +33,9 @@ pagina_atual = st.navigation(paginas)
 with st.sidebar:
     st.header("⚙️ Configurações")
     chave_secrets = state.obter_api_key()
+    # O valor inicial vem de state.iniciar_estado() (sem index= aqui, senão o
+    # Streamlit ignora o padrão e avisa que o valor veio de dois lugares).
     st.radio("Origem dos dados", ["Simulação", "API OpenWeather"],
-             index=1 if chave_secrets else 0,
              help="Sem chave de API, o app usa leituras simuladas.", key="modo")
     if st.session_state.modo == "API OpenWeather" and not chave_secrets:
         st.text_input("Chave da OpenWeather", type="password", key="api_key_input",

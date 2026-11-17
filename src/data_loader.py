@@ -29,6 +29,11 @@ g1 uol cnn folha estadão globo notícias brasil agência r7 metrópoles terra
 """.split())
 
 
+def normalizar_poluente(sigla: str) -> str:
+    """Padroniza a sigla do poluente: ' pm2.5 ' -> 'MP2.5' (aceita PM ou MP)."""
+    return str(sigla).strip().upper().replace("PM", "MP")
+
+
 def ler_csv(caminho: Path) -> pd.DataFrame | None:
     return pd.read_csv(caminho) if caminho.exists() else None
 
@@ -54,7 +59,7 @@ def validar_upload(df: pd.DataFrame) -> tuple[pd.DataFrame | None, list[str]]:
     df = df[COLUNAS_UPLOAD].copy()
     df["data"] = pd.to_datetime(df["data"], errors="coerce", dayfirst=True)
     df["valor"] = pd.to_numeric(df["valor"], errors="coerce")
-    df["poluente"] = df["poluente"].astype(str).str.strip().str.upper().str.replace("PM", "MP")
+    df["poluente"] = df["poluente"].map(normalizar_poluente)
     df["cidade"] = df["cidade"].astype(str).str.strip()
 
     invalidos = ~df["poluente"].isin(POLUENTES_VALIDOS)

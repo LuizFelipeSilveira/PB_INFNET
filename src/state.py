@@ -21,7 +21,8 @@ def iniciar_estado() -> None:
         "arquivos_importados": [],  # nomes dos CSVs já incorporados
         "ultima_avaliacao": None,
         "cidade": "Rio de Janeiro - RJ",
-        "modo": "Simulação",
+        # Com chave configurada em secrets, começa direto na API real.
+        "modo": "API OpenWeather" if obter_api_key() else "Simulação",
         "cenario": "Aleatório",
         "perfil": "População em geral",
         # Preenchido de verdade pela barra lateral em app.py; o padrão aqui é só

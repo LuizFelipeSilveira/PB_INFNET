@@ -42,7 +42,7 @@
 | `conc_min`, `conc_max` | decimal | Faixa de concentração (vazio = sem limite superior) |
 | `recomendacao` | texto | Mensagem de saúde para a categoria |
 
-### 2.3 `noticias_qualidade_ar.csv` ([N] linhas, coletado em [data])
+### 2.3 `noticias_qualidade_ar.csv` (281 linhas, coletado em 19/10/2026)
 
 | Coluna | Tipo | Descrição |
 |---|---|---|
@@ -95,12 +95,12 @@ consumido pelo app nem pela API nesta etapa.
 
 | Indicador | Valor |
 |---|---|
-| Notícias coletadas | [N] |
-| Veículos distintos | [N] |
-| Período das notícias | [data inicial] a [data final] |
-| Tabelas HTML extraídas | [N] |
-| Palavras mais frequentes | [top 5, ver aba Notícias e palavras] |
-| Documentos no corpus para LLM | [N] (ver `python scripts/prepare_corpus.py`, que imprime a contagem por tipo) |
+| Notícias coletadas | 281 (únicas por título; 91 de "qualidade do ar", 82 de "poluição do ar", 71 de "queimadas fumaça", 37 de "índice de qualidade do ar") |
+| Veículos distintos | 103 (mais frequentes: IQAir 52, G1 46, Amazonas Atual 14) |
+| Período das notícias | 12/01/2026 a 19/10/2026 |
+| Tabelas HTML extraídas | 1 (Wikipédia; é a caixa de navegação "Poluição atmosférica", sem faixas do IQAr). CETESB: 0 |
+| Palavras mais frequentes | qualidade (279), manaus (273), fumaça (214), queimadas (159), poluição (129) |
+| Documentos no corpus para LLM | 322: 281 notícias, 30 faixas oficiais, 11 blocos de referência (ver `python scripts/prepare_corpus.py`, que imprime a contagem por tipo) |
 
 ## 5. Considerações éticas e legais
 

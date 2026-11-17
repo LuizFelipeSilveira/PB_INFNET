@@ -95,12 +95,13 @@ def calcular(
     Equivalente à calculadora da aba *Tabela IQAr* do app, mas acessível por
     qualquer cliente HTTP (curl, Postman, outro serviço).
     """
+    sigla = dl.normalizar_poluente(poluente)
     try:
-        idx = calcular_indice(poluente.upper(), concentracao)
+        idx = calcular_indice(sigla, concentracao)
     except ValueError as erro:
         raise HTTPException(400, str(erro)) from erro
     cat = categoria(idx)
-    return ResultadoIQAr(poluente=poluente.upper(), concentracao=concentracao,
+    return ResultadoIQAr(poluente=sigla, concentracao=concentracao,
                          iqar=idx, categoria=cat, recomendacao=RECOMENDACOES[cat])
 
 
@@ -132,7 +133,7 @@ def registrar_leitura(leitura: NovaLeitura) -> LeituraRegistrada:
     consulta. É o mesmo tipo de dado que a aba *Meus dados* aceita por upload de
     CSV, só que por integração direta (POST) em vez de arquivo.
     """
-    sigla = leitura.poluente.strip().upper().replace("PM", "MP")
+    sigla = dl.normalizar_poluente(leitura.poluente)
     if sigla not in dl.POLUENTES_VALIDOS:
         raise HTTPException(400, f"Poluente inválido: {leitura.poluente}. "
                                   f"Use um de {sorted(dl.POLUENTES_VALIDOS)}.")

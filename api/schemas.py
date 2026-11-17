@@ -39,7 +39,7 @@ class NovaLeitura(BaseModel):
 
     cidade: str = Field(..., examples=["Rio de Janeiro - RJ"])
     poluente: str = Field(..., description=f"Um de: {sorted(POLUENTES_VALIDOS)}")
-    valor: float = Field(..., gt=0, description="Concentração na unidade oficial do poluente.")
+    valor: float = Field(..., ge=0, description="Concentração na unidade oficial do poluente.")
     data: date | None = Field(None, description="Data da medição. Se omitida, usa a data atual.")
     origem: str = Field("api", description="De onde veio a medição (sensor, estação, etc.).")
 
