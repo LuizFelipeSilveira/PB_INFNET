@@ -6,7 +6,7 @@ import streamlit as st
 
 from src import data_loader as dl
 from src import state
-from src.iqar import RECOMENDACOES, calcular_indice, categoria
+from src.iqar import FONTE_LIMITES, RECOMENDACOES, calcular_indice, categoria
 
 state.iniciar_estado()
 
@@ -18,7 +18,10 @@ if tabela is None:
 else:
     pol = st.segmented_control("Poluente", tabela["poluente"].unique(), default="MP2.5")
     vis = tabela[tabela["poluente"] == pol] if pol else tabela
-    st.dataframe(vis.drop(columns=["nome"]), hide_index=True, width="stretch")
+    st.dataframe(vis.drop(columns=["nome", "fonte"], errors="ignore"), hide_index=True,
+                 width="stretch")
+    st.caption(f"Fonte das faixas usadas no cálculo: **{FONTE_LIMITES}**. "
+               "Atualize com `python scripts/scraping/scrape_iqar.py`.")
 
     st.markdown("##### Calculadora rápida")
     c1, c2 = st.columns(2)

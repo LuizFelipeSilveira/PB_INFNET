@@ -69,7 +69,8 @@ def _docs_faixas_oficiais() -> list[Documento]:
             f"{linha['unidade']}. Recomendação oficial: {linha['recomendacao']}"
         )
         docs.append(Documento(
-            id=f"faixa-{i}", tipo="faixa_oficial", texto=texto, fonte="CETESB / CONAMA 491/2018",
+            id=f"faixa-{i}", tipo="faixa_oficial", texto=texto,
+            fonte=str(linha.get("fonte") or "Tabela IQAr (CONAMA 506/2024)"),
             metadados={"poluente": linha["poluente"], "categoria": linha["categoria"]},
         ))
     return docs

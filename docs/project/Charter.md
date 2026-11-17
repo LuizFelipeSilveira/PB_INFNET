@@ -24,7 +24,7 @@ qualidade do ar nas cidades.
 ### Dentro do escopo
 O projeto entrega uma aplicação web em Streamlit, organizada em múltiplas páginas com menu de
 navegação, que consulta dados horários de poluentes (MP2.5, MP10, O3, NO2, SO2 e CO) para
-capitais brasileiras, calcula o IQAr segundo a metodologia CETESB / CONAMA 491/2018 e apresenta
+capitais brasileiras, calcula o IQAr segundo a orientação técnica do MMA (CONAMA 506/2024) e apresenta
 recomendações de saúde adaptadas ao perfil do usuário. A aplicação também exibe notícias recentes
 sobre qualidade do ar coletadas por web scraping, com nuvem de palavras e estatísticas, e permite
 que o usuário envie e baixe medições próprias em CSV.
@@ -89,15 +89,19 @@ era que o conteúdo fosse montado via JavaScript, então `scripts/scraping/scrap
 renderizar essa fonte com um Chrome headless (Selenium + `webdriver-manager`, listada em
 `FONTES_DINAMICAS`) antes de extrair as tabelas.
 
-Testado com internet de verdade, o resultado continuou **0 tabelas mesmo com Selenium** — ou seja,
-a hipótese de "precisa de JavaScript" não se confirmou. A explicação mais provável é que a página
-simplesmente não apresenta os padrões de qualidade do ar num elemento `<table>` (podem estar em
-cards/`<div>`, numa imagem ou num PDF linkado). Por isso, essa fonte segue documentada como
-candidata, mas a referência oficial confiável do projeto continua sendo a tabela já codificada em
-`src/iqar.py` (a partir da Resolução CONAMA 491/2018), somada ao scraping da Wikipédia, que
-funciona normalmente com `requests`. Para obter a página da CETESB de fato, o próximo passo seria
-inspecionar sua estrutura HTML real (`exibir código-fonte` no navegador) e adaptar
-`extrair_tabelas` ao formato correto, em vez de seguir assumindo que é `<table>`.
+Testado com internet de verdade, o resultado continuou **0 tabelas mesmo com Selenium**. Ou seja,
+a hipótese de "precisa de JavaScript" não se confirmou: a página não apresenta os padrões num
+elemento `<table>`. A CETESB segue como fonte de texto (nuvem de palavras).
+
+### Fonte da tabela oficial (TP4)
+A tabela de faixas do IQAr passou a vir da **orientação técnica do MMA** (jan/2025), que publica o
+Quadro 1 da Resolução CONAMA 506/2024 em PDF. O scraper encontra o link do PDF na página do MMA
+(Beautiful Soup), extrai o Quadro 1 com pdfplumber e valida a estrutura antes de gravar
+`data/raw/tabela_iqar.csv`. O cálculo do app (`src/iqar.py`) lê as faixas desse arquivo. A tabela
+no código ficou só como reserva, usada se o PDF e a cópia local em `data/external/` falharem. A
+coluna `fonte` e o log de coleta registram qual caminho foi usado. A mudança também atualizou a
+norma: a CONAMA 491/2018 tinha MP10 "Boa" até 50 µg/m³, MP2.5 "Boa" até 25 µg/m³ e outras faixas
+para o SO2. O cálculo passou a seguir o arredondamento e o exemplo resolvido da orientação.
 
 ## 7. Cronograma
 

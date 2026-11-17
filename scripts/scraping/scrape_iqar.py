@@ -1,4 +1,4 @@
-"""Extrai tabelas e texto de páginas de referência sobre o IQAr.
+"""Extrai a tabela oficial do IQAr (PDF do MMA) e textos de referência (CETESB, Wikipédia).
 
 Execute a partir da raiz do projeto:
     python scripts/scraping/scrape_iqar.py
@@ -7,8 +7,22 @@ Execute a partir da raiz do projeto:
 Saídas em data/raw/:
     tabelas_web/<fonte>_tabela_<n>.csv   -> tabelas HTML brutas encontradas
     referencia_iqar_texto.txt            -> texto das páginas (usado na nuvem de palavras)
-    tabela_iqar.csv                      -> tabela consolidada usada pelo app
+    tabela_iqar.csv                      -> faixas oficiais do IQAr, usadas no cálculo do app
     log_coleta_iqar.csv                  -> status, nº de tabelas e motor usado por fonte
+e em data/external/:
+    mma_orientacao_tecnica_iqar_jan2025.pdf -> cópia do PDF oficial (reserva offline)
+
+De onde vem a tabela oficial (TP4)
+-----------------------------------
+As faixas do IQAr vêm do Quadro 1 da "Orientação técnica: índice de qualidade do ar"
+do MMA (jan/2025, Resolução CONAMA 506/2024), publicada em PDF:
+  1. BeautifulSoup lê a página do IQAr no site do MMA e encontra o link do PDF;
+     se não achar, usa o endereço conhecido do PDF;
+  2. o PDF é baixado e o Quadro 1 é extraído com pdfplumber (src/tabela_oficial.py);
+  3. a tabela é validada (6 poluentes x 5 faixas contínuas) antes de ser gravada.
+Se o download falhar, usa a cópia em data/external/. Se nada der certo, grava a
+reserva que fica no código (src/iqar.py). O log registra qual caminho foi usado e o
+CSV traz a coluna `fonte`.
 
 Sobre o uso de Selenium (TP3, item 3)
 --------------------------------------
@@ -36,10 +50,20 @@ from bs4 import BeautifulSoup
 
 RAIZ = Path(__file__).resolve().parents[2]
 sys.path.append(str(RAIZ))
-from src.iqar import CATEGORIAS, FAIXAS_INDICE, LIMITES, NOMES, RECOMENDACOES, UNIDADES  # noqa: E402
+from src.iqar import (  # noqa: E402
+    CATEGORIAS, FAIXAS_INDICE, FONTE_REFERENCIA, LIMITES_REFERENCIA, NOMES, RECOMENDACOES,
+    UNIDADES,
+)
+from src.tabela_oficial import TabelaInvalida, extrair_quadro1, validar  # noqa: E402
 
 DATA_RAW = RAIZ / "data" / "raw"
 PASTA_TABELAS = DATA_RAW / "tabelas_web"
+PDF_LOCAL = RAIZ / "data" / "external" / "mma_orientacao_tecnica_iqar_jan2025.pdf"
+
+PAGINA_MMA = ("https://www.gov.br/mma/pt-br/assuntos/meio-ambiente-urbano-recursos-hidricos-"
+              "qualidade-ambiental/qualidade-do-ar/indice-de-qualidade-do-ar-iqar")
+URL_PDF_MMA = PAGINA_MMA + "/orientacao-tecnica-indice-de-qualidade-do-ar-jan-25.pdf"
+FONTE_MMA = "MMA, Orientação técnica IQAr (jan/2025), Quadro 1 - CONAMA 506/2024"
 
 FONTES = {
     "cetesb": "https://cetesb.sp.gov.br/ar/padroes-de-qualidade-do-ar/",
@@ -130,16 +154,51 @@ def extrair_texto(soup: BeautifulSoup) -> str:
     return " ".join(p.get_text(" ", strip=True) for p in area.find_all(["p", "li", "td"]))
 
 
-def tabela_consolidada() -> pd.DataFrame:
-    """Tabela de referência (CETESB / CONAMA 491/2018) no formato longo usado pelo app."""
+def link_do_pdf_mma() -> str:
+    """Procura, na página do IQAr do MMA, o link da orientação técnica em PDF."""
+    soup = baixar(PAGINA_MMA)
+    if soup is not None:
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if "orientacao-tecnica" in href and "qualidade-do-ar" in href:
+                return href if href.startswith("http") else requests.compat.urljoin(PAGINA_MMA, href)
+        print("  ! Link do PDF não encontrado na página; usando o endereço conhecido.")
+    return URL_PDF_MMA
+
+
+def obter_tabela_oficial() -> tuple[dict, str, str]:
+    """Devolve (limites, fonte, motor). Tenta o PDF online, depois a cópia local."""
+    url = link_do_pdf_mma()
+    print(f"Coletando mma (requests + pdfplumber): {url}")
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=30)
+        resp.raise_for_status()
+        limites, indices = extrair_quadro1(resp.content)
+        validar(limites, indices)
+        PDF_LOCAL.parent.mkdir(parents=True, exist_ok=True)
+        PDF_LOCAL.write_bytes(resp.content)  # atualiza a cópia de reserva
+        return limites, FONTE_MMA, "requests+pdfplumber"
+    except (requests.RequestException, TabelaInvalida) as erro:
+        print(f"  ! PDF online indisponível ({erro}). Tentando a cópia local.")
+    try:
+        limites, indices = extrair_quadro1(PDF_LOCAL)
+        validar(limites, indices)
+        return limites, f"{FONTE_MMA} (cópia local)", "pdf-local+pdfplumber"
+    except (OSError, TabelaInvalida) as erro:
+        print(f"  ! Cópia local indisponível ({erro}). Usando a reserva do código.")
+    return LIMITES_REFERENCIA, FONTE_REFERENCIA, "reserva-no-codigo"
+
+
+def tabela_consolidada(limites: dict, fonte: str) -> pd.DataFrame:
+    """Tabela de referência do IQAr no formato longo usado pelo app e pela API."""
     linhas = []
-    for pol, faixas in LIMITES.items():
+    for pol, faixas in limites.items():
         for (ci, cf), (ii, if_), cat in zip(faixas, FAIXAS_INDICE, CATEGORIAS):
             linhas.append({
                 "poluente": pol, "nome": NOMES[pol], "unidade": UNIDADES[pol],
                 "categoria": cat, "indice_min": ii, "indice_max": if_,
-                "conc_min": ci, "conc_max": cf if cat != "Péssima" else None,
-                "recomendacao": RECOMENDACOES[cat],
+                "conc_min": ci, "conc_max": cf,
+                "recomendacao": RECOMENDACOES[cat], "fonte": fonte,
             })
     return pd.DataFrame(linhas)
 
@@ -169,7 +228,13 @@ def main() -> None:
         print(f"  {len(tabelas)} tabela(s) salvas")
 
     (DATA_RAW / "referencia_iqar_texto.txt").write_text("\n\n".join(textos), encoding="utf-8")
-    tabela_consolidada().to_csv(DATA_RAW / "tabela_iqar.csv", index=False)
+
+    limites, fonte, motor = obter_tabela_oficial()
+    tabela_consolidada(limites, fonte).to_csv(DATA_RAW / "tabela_iqar.csv", index=False)
+    log.append({"fonte": "mma", "url": URL_PDF_MMA,
+                "status": "ok" if motor != "reserva-no-codigo" else "erro",
+                "tabelas": int(motor != "reserva-no-codigo"), "motor": motor})
+    print(f"  tabela oficial: {fonte}")
 
     log_df = pd.DataFrame(log)
     log_df["coletado_em"] = datetime.now().isoformat(timespec="seconds")

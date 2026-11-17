@@ -1,7 +1,7 @@
 # 🌬️ Éter: Monitor Inteligente de Qualidade do Ar
 
 Aplicação Streamlit que traduz índices de poluição do ar em recomendações simples de saúde,
-combinando dados em tempo real (OpenWeather) com tabelas oficiais de referência (CETESB / CONAMA 491/2018)
+combinando dados em tempo real (OpenWeather) com a tabela oficial do IQAr (MMA / CONAMA 506/2024, extraída do PDF oficial)
 e notícias coletadas por web scraping.
 
 ## Estrutura do projeto (TDSP)
@@ -19,7 +19,8 @@ eter/
 │   │                              #        GET /llm/status)
 │   └── schemas.py                #   modelos Pydantic de entrada/saída
 ├── src/                          # Código reutilizável (usado pelo app E pela API)
-│   ├── iqar.py                   #   cálculo do IQAr e recomendações
+│   ├── iqar.py                   #   cálculo do IQAr (faixas lidas de tabela_iqar.csv) e recomendações
+│   ├── tabela_oficial.py         #   extrai e valida o Quadro 1 do PDF do MMA
 │   ├── api.py                    #   OpenWeather + modo simulado
 │   ├── data_loader.py            #   leitura de dados e validação de uploads
 │   ├── state.py                  #   sessão e cache compartilhados entre páginas
@@ -37,7 +38,7 @@ eter/
 ├── data/
 │   ├── raw/                      #   saídas dos scrapers (CSV/TXT)
 │   ├── processed/                #   corpus_llm.jsonl, leituras_api.csv (não versionados)
-│   └── external/                 #   dados de terceiros
+│   └── external/                 #   dados de terceiros (cópia do PDF do MMA, reserva offline)
 ├── notebooks/                    # Data Understanding: análises exploratórias
 ├── docs/
 │   ├── project/Charter.md        # Business Understanding
@@ -183,7 +184,7 @@ sugestão e o id. Ela também avisa quando a API está fora do ar.
 |---|---|
 | Interface dinâmica, múltiplas páginas | `app.py` + `pages/`, com menu de navegação (`st.navigation`) |
 | Seletor de cidade, perfil, cenários, comparação, filtros, calculadora | Páginas **Monitor** e **Tabela IQAr** |
-| Web scraping (Beautiful Soup + Selenium) | `scripts/scraping/` → `data/raw/*.csv` e `*.txt` (Selenium só para a CETESB, ver Charter §6) |
+| Web scraping (Beautiful Soup + Selenium + pdfplumber) | `scripts/scraping/` → `data/raw/*.csv` e `*.txt`. A tabela oficial do IQAr vem do PDF do MMA (link encontrado com Beautiful Soup, Quadro 1 extraído com pdfplumber e validado); Selenium só para a CETESB (ver Charter §6) |
 | Nuvem de palavras e estatísticas | Página **Notícias e palavras** |
 | API própria (FastAPI) | `api/main.py`: `GET /cidades`, `GET /iqar/tabela`, `GET /iqar/calcular`, `GET`+`POST /leituras` |
 | Preparação para LLM | `src/llm_prep.py` → `data/processed/corpus_llm.jsonl`; visão geral na página **API & IA** |

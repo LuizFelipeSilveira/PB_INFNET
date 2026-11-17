@@ -8,10 +8,10 @@
 | # | Fonte | Tipo de acesso | Arquivo gerado | Atualização |
 |---|---|---|---|---|
 | 1 | OpenWeather Air Pollution API | API REST (JSON) | não persistido; cache em memória por 10 min | Horária |
-| 2 | CETESB: padrões e IQAr | Web scraping (Selenium + Beautiful Soup — página renderizada via JS, ver Charter §6) | `data/raw/tabelas_web/cetesb_tabela_*.csv`, `referencia_iqar_texto.txt` | Sob demanda |
+| 2 | CETESB: padrões e IQAr | Web scraping (Selenium + Beautiful Soup, ver Charter §6); só o texto é aproveitado | `referencia_iqar_texto.txt` | Sob demanda |
 | 3 | Wikipédia: Índice de qualidade do ar | Web scraping (Beautiful Soup) | `data/raw/tabelas_web/wikipedia_tabela_*.csv`, `referencia_iqar_texto.txt` | Sob demanda |
 | 4 | Google Notícias (RSS) | Web scraping (Beautiful Soup, parser XML) | `data/raw/noticias_qualidade_ar.csv`, `noticias_texto.txt` | Sob demanda |
-| 5 | Resolução CONAMA 491/2018 + faixas CETESB | Referência normativa consolidada | `data/raw/tabela_iqar.csv` | Estática |
+| 5 | MMA: Orientação técnica IQAr (jan/2025), CONAMA 506/2024 | Scraping de PDF: link encontrado com Beautiful Soup, Quadro 1 extraído com pdfplumber e validado; reservas: cópia em `data/external/` e tabela no código | `data/raw/tabela_iqar.csv` | Sob demanda |
 | 6 | Usuário (app) | Upload de CSV na aplicação | mantido em `st.session_state`; download opcional | Por sessão |
 | 7 | Usuário/sistemas externos (API) | `POST /leituras` (FastAPI) | `data/processed/leituras_api.csv` (não versionado) | Sob demanda |
 | 8 | Corpus consolidado para LLM | Reaproveita as fontes 2–4 (`src/llm_prep.py`) | `data/processed/corpus_llm.jsonl` (não versionado) | Sob demanda |
@@ -39,8 +39,9 @@
 | `unidade` | texto | µg/m³ ou ppm |
 | `categoria` | texto | Boa, Moderada, Ruim, Muito Ruim, Péssima |
 | `indice_min`, `indice_max` | inteiro | Faixa do IQAr |
-| `conc_min`, `conc_max` | decimal | Faixa de concentração (vazio = sem limite superior) |
+| `conc_min`, `conc_max` | decimal | Faixa de concentração (na última faixa, o teto técnico do Quadro 1) |
 | `recomendacao` | texto | Mensagem de saúde para a categoria |
+| `fonte` | texto | Origem: PDF do MMA (online ou cópia local) ou reserva no código |
 
 ### 2.3 `noticias_qualidade_ar.csv` (281 linhas, coletado em 19/10/2026)
 

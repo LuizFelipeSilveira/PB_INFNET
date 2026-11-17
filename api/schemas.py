@@ -56,8 +56,10 @@ class FaixaReferencia(BaseModel):
     indice_min: IQAr
     indice_max: IQAr
     conc_min: float = Field(..., ge=0)
-    conc_max: float | None = Field(None, ge=0, description="Vazio na última faixa (sem teto).")
+    conc_max: float | None = Field(None, ge=0, description="Fim da faixa (na última, o teto "
+                                                           "técnico do Quadro 1).")
     recomendacao: str = Field(..., min_length=1)
+    fonte: str | None = Field(None, description="De onde veio a tabela (PDF do MMA ou reserva).")
 
 
 class ResultadoIQAr(BaseModel):
@@ -137,7 +139,7 @@ class AnalisePergunta(BaseModel):
     resposta: str = Field(..., min_length=1)
     poluentes_consultados: list[Poluente] = Field(
         ..., description="Poluentes da tabela enviados como contexto ao modelo.")
-    fonte: str = Field("Tabela IQAr do Éter (CETESB / CONAMA 491/2018)")
+    fonte: str = Field(..., description="Origem da tabela usada como contexto.")
 
 
 # O campo `tipo` diz qual dos três formatos veio ("união discriminada"): o cliente

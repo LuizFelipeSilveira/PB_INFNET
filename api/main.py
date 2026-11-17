@@ -27,7 +27,7 @@ if str(RAIZ) not in sys.path:
 
 from src import data_loader as dl  # noqa: E402
 from src.api import CIDADES  # noqa: E402
-from src.iqar import RECOMENDACOES, calcular_indice, categoria  # noqa: E402
+from src.iqar import FONTE_LIMITES, RECOMENDACOES, calcular_indice, categoria  # noqa: E402
 
 from src.llm import LLMErro, LLMLocal, contexto_iqar, rotulo_sentimento  # noqa: E402
 
@@ -100,7 +100,8 @@ def tabela_iqar(
     """GET — devolve a tabela oficial de faixas do IQAr (gerada por `scripts/scraping/scrape_iqar.py`).
 
     Útil para qualquer cliente (o app, um notebook, outro serviço) que precise
-    das faixas oficiais sem reimplementar a metodologia CETESB/CONAMA 491/2018.
+    das faixas oficiais (Quadro 1 do MMA, CONAMA 506/2024) sem reimplementar a metodologia.
+    A coluna `fonte` diz se a tabela veio do PDF do MMA ou da reserva no código.
     """
     if not dl.ARQ_IQAR.exists():
         raise ErroHTTP(503, "dados_indisponiveis", "A tabela de referência do IQAr ainda não foi gerada.",
@@ -255,7 +256,7 @@ def _montar_analise(tarefa: str, texto: str, resposta: str):
         return AnaliseSentimento(rotulo=rotulo, rotulo_valido=rotulo is not None,
                                  resposta_modelo=resposta)
     return AnalisePergunta(pergunta=texto, resposta=resposta,
-                           poluentes_consultados=contexto_iqar(texto)[1])
+                           poluentes_consultados=contexto_iqar(texto)[1], fonte=FONTE_LIMITES)
 
 
 @app.post("/processar_texto", response_model=RespostaProcessamento, tags=["llm"],
