@@ -3,22 +3,22 @@
 Fluxo, do dado ao insight:
 
 1. `preparar_noticias`: limpa o CSV do scraping. Remove as páginas de índice do
-   IQAir ("Qualidade do ar em Campinas"), que não são notícias, e acrescenta o mês
-   e o local citado.
+   IQAir, que não são notícias, e acrescenta o mês e o local citado.
 2. `filtrar`: escolhe o recorte (local, mês, tema) e as notícias mais recentes.
-3. `sumarizar`: resume com o LLM local em duas etapas (*map-reduce*):
-     * map: cada lote de até 20 manchetes vira uma lista de fatos;
-     * reduce: os fatos de todos os lotes viram um boletim com Resumo, Pontos
-       principais e Recomendação.
-   Recortes pequenos (um lote só) vão direto para o boletim.
-4. `verificar_fidelidade`: confere se os números e nomes próprios do boletim
-   aparecem nas manchetes de origem. É uma checagem automática e barata de
-   "alucinação": não prova que o resumo está certo, mas aponta o que conferir.
-5. `estatisticas`: números calculados por código (não pelo LLM): quantidade de
-   notícias, período, veículos, locais e, se houver, a distribuição de sentimento.
+3. `sumarizar`: resume com o LLM local numa cadeia de prompts curtos, uma tarefa
+   por chamada (lição das rodadas 1 a 3 de avaliação):
+     * fatos: cada lote de até 20 manchetes vira 3 fatos;
+     * consolidação: os fatos são reduzidos em árvore até restarem os 3 principais;
+     * resumo: os fatos viram duas frases.
+4. `categoria_noticiada`: a recomendação de saúde é a orientação oficial (src/iqar.py)
+   da categoria mais grave citada nas manchetes. É escolhida por código, não pelo LLM.
+5. `verificar_fidelidade` e `recomendacao_coerente`: conferem se números e nomes do
+   texto gerado aparecem nas manchetes e se a orientação combina com o sentimento.
+6. `estatisticas`: números calculados por código (quantidade, período, veículos,
+   locais, sentimento).
 
-O LLM só escreve texto; tudo o que é contagem vem do pandas. Assim, cada número
-do dashboard é exato, e o texto gerado pode ser conferido com as fontes.
+O LLM só escreve texto; tudo o que é contagem ou orientação de saúde vem do código.
+Assim, cada número do dashboard é exato, e o texto gerado pode ser conferido.
 """
 from __future__ import annotations
 
@@ -29,13 +29,13 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.iqar import CATEGORIAS, RECOMENDACOES
+from src.iqar import RECOMENDACOES
 from src.llm import sem_acento
 
 TAMANHO_LOTE = 20          # manchetes por chamada na etapa map
 MAX_FATOS_REDUCE = 12      # acima disso, os fatos são consolidados antes do boletim
 MAX_TOKENS_FATOS = 160
-MAX_TOKENS_BOLETIM = 230
+MAX_TOKENS_RESUMO = 120
 
 # Capitais (e algumas cidades frequentes no noticiário), na ordem de busca.
 LOCAIS = [
@@ -57,59 +57,55 @@ _PAGINA_INDICE = re.compile(r"^Qualidade do ar em [^:|]+$|\|\s*IQAir", re.IGNORE
 
 
 # ---------------------------------------------------------------- prompts
+# Rodadas 1 a 3 ensinaram que o modelo de 0,8B acerta quando cada chamada tem UMA tarefa
+# simples. Pedir resumo, lista e escolha de orientação numa resposta só quebrou o formato
+# nos recortes grandes. Por isso a sumarização é uma cadeia de prompts curtos:
+#   fatos (por lote) -> consolidação (até restarem 3) -> resumo (duas frases).
 SISTEMA_SUMARIZACAO = (
     "Você é o analista do Éter, um app brasileiro de qualidade do ar. Você resume notícias "
     "para a população, em português do Brasil, de forma clara e fiel ao que foi noticiado."
 )
+
+_REGRAS = """Regras:
+- use somente as informações acima;
+- escreva cada fato em uma linha, começando com "- ";
+- escreva locais e números exatamente como estão acima (não troque um estado por uma cidade);
+- ao citar um número, repita a palavra que vem junto dele;
+- não cite a numeração das manchetes;
+- não repita fatos parecidos."""
 
 PROMPT_FATOS = """Abaixo estão manchetes de notícias sobre qualidade do ar{recorte}, numeradas.
 
 {manchetes}
 
 Liste os 3 fatos mais importantes relatados nessas manchetes.
-Regras:
-- use somente informações das manchetes;
-- escreva cada fato em uma linha, começando com "- ";
-- cite o local e os números quando as manchetes trouxerem;
-- escreva o local exatamente como na manchete (não troque um estado por uma cidade);
-- ao citar um número, repita a palavra que vem junto dele na manchete;
-- não repita fatos parecidos."""
+""" + _REGRAS
 
 PROMPT_CONSOLIDAR = """Abaixo estão fatos extraídos de notícias sobre qualidade do ar{recorte}.
 
 {fatos}
 
-Junte esses fatos nos 3 mais importantes, sem repetir.
-Regras:
-- use somente os fatos acima;
-- escreva cada fato em uma linha, começando com "- ";
-- mantenha locais e números exatamente como estão acima."""
+Junte esses fatos nos 3 mais importantes.
+""" + _REGRAS
 
-PROMPT_BOLETIM = """Abaixo estão {tipo_entrada} sobre qualidade do ar{recorte}.
+PROMPT_RESUMO = """Abaixo estão fatos extraídos de notícias sobre qualidade do ar{recorte}.
 
-{conteudo}
+{fatos}
 
-Orientações oficiais de saúde:
-{orientacoes}
+Escreva um resumo de duas frases sobre o que aconteceu, para a população.
+Use somente os fatos acima. Escreva locais e números exatamente como estão acima.
+Responda só com as duas frases, sem título e sem lista."""
 
-Escreva um boletim exatamente neste formato, com exatamente 3 pontos:
-Resumo: <duas frases sobre o que aconteceu>
-Recomendação: <só o nome da categoria da orientação oficial que combina com a situação relatada>
-Pontos principais:
-- <fato 1>
-- <fato 2>
-- <fato 3>
-
-Use somente as informações acima. Não invente números, datas nem locais. Escreva os locais e os
-números exatamente como aparecem acima."""
-
-# A recomendação de saúde vem da norma (src/iqar.py), não é escrita pelo modelo: na
-# rodada 1 ele sugeriu "evite sair da cidade", um conselho inadequado. O modelo só
-# escolhe qual das 5 orientações oficiais combina com o noticiário (escolha fechada,
-# como na classificação de sentimento). Rodada 2: com orientações numeradas ao lado de
-# manchetes numeradas, o modelo confundiu as listas; por isso a escolha é pelo nome.
-# A recomendação vem antes dos pontos para não ser cortada quando a saída se alonga.
-ORIENTACOES = "\n".join(f"- {cat}: {RECOMENDACOES[cat]}" for cat in CATEGORIAS)
+# A recomendação de saúde não é escolhida pelo modelo (rodadas 2 e 3: ele escolheu "Boa" e
+# "Moderada" para recortes com mais de 90% de notícias negativas). Ela vem da norma
+# (src/iqar.py), para a categoria oficial mais grave citada nas próprias manchetes.
+TERMOS_CATEGORIA = [  # do mais grave para o mais brando; "insalubre" e "perigoso" vêm do AQI
+    ("Péssima", r"pessim|perigos"),
+    ("Muito Ruim", r"muito ruim|muito insalubre"),
+    ("Ruim", r"\bruim\b|insalubre|critic"),
+    ("Moderada", r"moderad"),
+    ("Boa", r"qualidade do ar (?:e |esta |fica )?boa\b"),
+]
 
 
 # ---------------------------------------------------------------- preparo dos dados
@@ -199,15 +195,39 @@ def estatisticas(df: pd.DataFrame) -> dict:
     return est
 
 
-# ---------------------------------------------------------------- sumarização
+# ---------------------------------------------------------------- recomendação (código)
+def categoria_noticiada(manchetes: list[str]) -> tuple[str | None, int]:
+    """Categoria oficial citada nas manchetes e quantas manchetes a citam.
+
+    Cada manchete conta para a categoria mais grave que menciona. Vale a mais grave
+    citada por pelo menos 10% das manchetes (mínimo 2); se nenhuma chegar lá, a mais
+    citada (empate: a mais grave). Sem menção a categorias, devolve (None, 0).
+    """
+    contagem = {}
+    for titulo in manchetes:
+        alvo = sem_acento(titulo)
+        for categoria, padrao in TERMOS_CATEGORIA:
+            if re.search(padrao, alvo):
+                contagem[categoria] = contagem.get(categoria, 0) + 1
+                break
+    if not contagem:
+        return None, 0
+    ordem = [c for c, _ in TERMOS_CATEGORIA]
+    limiar = max(2, -(-len(manchetes) // 10))
+    for categoria in ordem:
+        if contagem.get(categoria, 0) >= limiar:
+            return categoria, contagem[categoria]
+    categoria = max(contagem, key=lambda c: (contagem[c], -ordem.index(c)))
+    return categoria, contagem[categoria]
+
+
+# ---------------------------------------------------------------- sumarização (LLM)
 @dataclass
 class Boletim:
     resumo: str
     pontos: list[str]
-    recomendacao: str | None           # texto oficial da orientação escolhida
-    categoria_recomendacao: str | None  # categoria do IQAr dessa orientação
+    formato_ok: bool  # resumo em texto corrido, ao menos 2 pontos e fatos vindos do modelo
     texto_bruto: str
-    formato_ok: bool  # o modelo seguiu o formato pedido?
 
 
 @dataclass
@@ -226,58 +246,39 @@ def _numerar(manchetes: list[str]) -> str:
 
 def _linhas_com_marcador(texto: str) -> list[str]:
     return [re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", linha).strip()
-            for linha in texto.splitlines()
+            for linha in texto.replace("**", "").splitlines()
             if re.match(r"^\s*(?:[-*•]|\d+[.)])\s+\S", linha)]
 
 
-def escolher_orientacao(resposta: str | None) -> str | None:
-    """Categoria escolhida pelo modelo: aceita o número (1–5) ou o nome da categoria."""
-    if not resposta:
-        return None
-    numero = re.search(r"\b([1-5])\b", resposta)
-    if numero:
-        return CATEGORIAS[int(numero.group(1)) - 1]
-    alvo = sem_acento(resposta)
-    for cat in sorted(CATEGORIAS, key=len, reverse=True):  # "Muito Ruim" antes de "Ruim"
-        if sem_acento(cat) in alvo:
-            return cat
-    return None
-
-
-def interpretar_boletim(texto: str) -> Boletim:
-    """Separa Resumo / Pontos principais / Recomendação. Tolera pequenas variações."""
-    norm = texto.replace("**", "")
-    resumo = re.search(r"Resumo\s*:\s*(.+?)(?=\n\s*Pontos|\n\s*Recomenda|\Z)", norm, re.S | re.I)
-    pontos = re.search(r"Pontos principais\s*:?\s*\n(.+?)(?=\n\s*Recomenda|\Z)", norm,
-                       re.S | re.I)
-    recom = re.search(r"Recomenda(?:ção|cao)\s*:\s*(.+)", norm, re.I)  # só a própria linha
-    categoria = escolher_orientacao(recom.group(1) if recom else None)
-    oficial = RECOMENDACOES[categoria] if categoria else None
-    lista = _linhas_com_marcador(pontos.group(1)) if pontos else []
-    if resumo and lista:
-        return Boletim(resumo=" ".join(resumo.group(1).split()), pontos=lista[:3],
-                       recomendacao=oficial, categoria_recomendacao=categoria,
-                       texto_bruto=texto, formato_ok=categoria is not None)
-    # Fora do formato: aproveita o texto inteiro como resumo, mas sinaliza.
-    corpo = re.split(r"\n\s*Recomenda", norm, flags=re.I)[0]
-    return Boletim(resumo=" ".join(corpo.split()), pontos=_linhas_com_marcador(corpo)[:3],
-                   recomendacao=oficial, categoria_recomendacao=categoria,
-                   texto_bruto=texto, formato_ok=False)
-
-
 def _sem_repetir(fatos: list[str]) -> list[str]:
+    """Remove fatos repetidos e "fatos" que só falam da numeração das manchetes."""
     vistos, unicos = set(), []
     for fato in fatos:
         chave = sem_acento(re.sub(r"\W+", " ", fato)).strip()
-        if chave and chave not in vistos:
-            vistos.add(chave)
-            unicos.append(fato)
+        if not chave or chave in vistos or re.search(r"\bmanchetes?\b", chave):
+            continue
+        vistos.add(chave)
+        unicos.append(fato)
     return unicos
+
+
+def limpar_resumo(texto: str) -> tuple[str, bool]:
+    """Tira rótulos e marcadores do resumo. Devolve (texto, veio em texto corrido?)."""
+    linhas = [l for l in texto.replace("**", "").splitlines() if l.strip()]
+    corrido = bool(linhas) and not any(re.match(r"^\s*(?:[-*•]|\d+[.)])\s", l) for l in linhas)
+    limpo = " ".join(re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", l).strip() for l in linhas)
+    limpo = re.sub(r"^\s*Resumo\s*:\s*", "", limpo, flags=re.I)
+    return " ".join(limpo.split()), corrido
 
 
 def sumarizar(manchetes: list[str], gerar, recorte: str = "",
               tamanho_lote: int = TAMANHO_LOTE) -> ResultadoSumarizacao:
-    """Resume uma lista de manchetes com map-reduce.
+    """Resume uma lista de manchetes com uma cadeia de prompts (map-reduce em árvore).
+
+    1. fatos: cada lote de até 20 manchetes vira 3 fatos;
+    2. consolidação: grupos de até 12 fatos viram 3, até restarem no máximo 12; se
+       restarem mais de 3, uma última consolidação escolhe os 3 pontos principais;
+    3. resumo: os fatos finais viram duas frases.
 
     `gerar(prompt, max_tokens) -> dict` é a função de geração (normalmente
     `LLMLocal.gerar_texto`); recebê-la como parâmetro permite testar sem o modelo.
@@ -285,41 +286,45 @@ def sumarizar(manchetes: list[str], gerar, recorte: str = "",
     if not manchetes:
         raise ValueError("Nenhuma manchete para resumir.")
     inicio = time.perf_counter()
-    lotes = [manchetes[i:i + tamanho_lote] for i in range(0, len(manchetes), tamanho_lote)]
-    tokens, chamadas, fatos = 0, 0, []
+    tokens = chamadas = 0
+    brutos = []
 
-    if len(lotes) == 1:
-        prompt = PROMPT_BOLETIM.format(tipo_entrada="manchetes de notícias, numeradas",
-                                       recorte=recorte, conteudo=_numerar(lotes[0]),
-                                       orientacoes=ORIENTACOES)
-    else:
-        for lote in lotes:  # etapa map
-            saida = gerar(PROMPT_FATOS.format(recorte=recorte, manchetes=_numerar(lote)),
-                          MAX_TOKENS_FATOS)
-            tokens, chamadas = tokens + saida["tokens_gerados"], chamadas + 1
-            fatos += _linhas_com_marcador(saida["resultado"]) or [saida["resultado"].strip()]
-        fatos = _sem_repetir(fatos)
-        # Rodada 2: com 39 fatos de uma vez, o modelo copiava a lista inteira e não chegava
-        # à recomendação. Acima de MAX_FATOS_REDUCE, consolida em grupos (reduce em árvore).
-        while len(fatos) > MAX_FATOS_REDUCE:
-            grupos = [fatos[i:i + MAX_FATOS_REDUCE]
-                      for i in range(0, len(fatos), MAX_FATOS_REDUCE)]
-            novos = []
-            for grupo in grupos:
-                saida = gerar(PROMPT_CONSOLIDAR.format(
-                    recorte=recorte, fatos="\n".join(f"- {f}" for f in grupo)), MAX_TOKENS_FATOS)
-                tokens, chamadas = tokens + saida["tokens_gerados"], chamadas + 1
-                novos += _linhas_com_marcador(saida["resultado"])[:3] or grupo[:3]
-            fatos = _sem_repetir(novos)
-        prompt = PROMPT_BOLETIM.format(  # etapa reduce
-            tipo_entrada="fatos extraídos de notícias", recorte=recorte,
-            conteudo="\n".join(f"- {f}" for f in fatos), orientacoes=ORIENTACOES)
-    saida = gerar(prompt, MAX_TOKENS_BOLETIM)
-    tokens, chamadas = tokens + saida["tokens_gerados"], chamadas + 1
-    return ResultadoSumarizacao(
-        boletim=interpretar_boletim(saida["resultado"]), n_lotes=len(lotes),
-        n_chamadas=chamadas, tokens_gerados=tokens,
-        tempo_s=round(time.perf_counter() - inicio, 1), fatos_intermediarios=fatos)
+    def chamar(prompt: str, max_tokens: int) -> str:
+        nonlocal tokens, chamadas
+        saida = gerar(prompt, max_tokens)
+        tokens, chamadas = tokens + saida["tokens_gerados"], chamadas + 1
+        brutos.append(saida["resultado"])
+        return saida["resultado"]
+
+    def consolidar(grupo: list[str]) -> list[str]:
+        texto = chamar(PROMPT_CONSOLIDAR.format(
+            recorte=recorte, fatos="\n".join(f"- {f}" for f in grupo)), MAX_TOKENS_FATOS)
+        return _linhas_com_marcador(texto)[:3] or grupo[:3]
+
+    lotes = [manchetes[i:i + tamanho_lote] for i in range(0, len(manchetes), tamanho_lote)]
+    fatos = []
+    for lote in lotes:  # 1. fatos (map)
+        texto = chamar(PROMPT_FATOS.format(recorte=recorte, manchetes=_numerar(lote)),
+                       MAX_TOKENS_FATOS)
+        fatos += _linhas_com_marcador(texto)[:3]
+    fatos = _sem_repetir(fatos)
+    reserva = not fatos  # o modelo não devolveu nenhum fato em lista
+    fatos = fatos or manchetes[:3]
+    intermediarios = list(fatos)
+    while len(fatos) > MAX_FATOS_REDUCE:  # 2. consolidação em árvore
+        grupos = [fatos[i:i + MAX_FATOS_REDUCE] for i in range(0, len(fatos), MAX_FATOS_REDUCE)]
+        fatos = _sem_repetir([f for g in grupos for f in consolidar(g)])
+    pontos = fatos if len(fatos) <= 3 else (_sem_repetir(consolidar(fatos)) or fatos[:3])
+    resumo, corrido = limpar_resumo(chamar(  # 3. resumo
+        PROMPT_RESUMO.format(recorte=recorte, fatos="\n".join(f"- {f}" for f in fatos)),
+        MAX_TOKENS_RESUMO))
+    boletim = Boletim(resumo=resumo, pontos=pontos[:3],
+                      formato_ok=bool(resumo) and corrido and len(pontos) >= 2 and not reserva,
+                      texto_bruto="\n---\n".join(brutos))
+    return ResultadoSumarizacao(boletim=boletim, n_lotes=len(lotes), n_chamadas=chamadas,
+                                tokens_gerados=tokens,
+                                tempo_s=round(time.perf_counter() - inicio, 1),
+                                fatos_intermediarios=intermediarios)
 
 
 # ---------------------------------------------------------------- fidelidade
@@ -329,11 +334,11 @@ _PALAVRAS_DE_FORMATO = {"resumo", "pontos", "principais", "recomendacao", "fato"
 
 
 def recomendacao_coerente(categoria: str | None, sentimento: dict | None) -> bool | None:
-    """Confere, por código, se a orientação escolhida combina com o tom das notícias.
+    """Confere a orientação contra um dado calculado de outra forma: o sentimento.
 
-    Rodada 2: o modelo escolheu "Boa" para um mês com manchetes de poluição "acima do
-    péssimo". Orientação branda (Boa/Moderada) com maioria de notícias negativas, ou
-    orientação grave (Muito Ruim/Péssima) com poucas negativas, é marcada como incoerente.
+    Orientação branda (Boa/Moderada) com 60% ou mais de notícias negativas, ou grave
+    (Muito Ruim/Péssima) com menos de 30%, é marcada como incoerente. Foi esta checagem
+    que mostrou, nas rodadas 2 e 3, que o LLM escolhia mal a orientação.
     """
     if not categoria or not sentimento:
         return None
@@ -425,14 +430,18 @@ def resumir_recorte(df: pd.DataFrame, gerar, local: str | None = None, mes: str 
     resultado = sumarizar(manchetes, gerar, recorte=descrever_recorte(local, mes, tema))
     b = resultado.boletim
     texto_gerado = " ".join([b.resumo, *b.pontos])
+    categoria, evidencia = categoria_noticiada(manchetes)
+    est = estatisticas(selecao)
     return {
         "filtros": {"local": local, "mes": mes, "tema": tema, "max_noticias": max_noticias},
         "descricao": descrever_recorte(local, mes, tema).strip() or "todas as notícias",
-        "estatisticas": estatisticas(selecao),
-        "boletim": {"resumo": b.resumo, "pontos": b.pontos, "recomendacao": b.recomendacao,
-                    "categoria_recomendacao": b.categoria_recomendacao,
-                    "recomendacao_coerente": recomendacao_coerente(
-                        b.categoria_recomendacao, estatisticas(selecao).get("sentimento")),
+        "estatisticas": est,
+        "boletim": {"resumo": b.resumo, "pontos": b.pontos,
+                    "recomendacao": RECOMENDACOES[categoria] if categoria else None,
+                    "categoria_recomendacao": categoria,
+                    "manchetes_que_citam_categoria": evidencia,
+                    "recomendacao_coerente": recomendacao_coerente(categoria,
+                                                                   est.get("sentimento")),
                     "formato_ok": b.formato_ok},
         # a recomendação é orientação geral de saúde, não fato noticiado: fica fora da checagem
         "fidelidade": verificar_fidelidade(" ".join([b.resumo, *b.pontos]), manchetes),

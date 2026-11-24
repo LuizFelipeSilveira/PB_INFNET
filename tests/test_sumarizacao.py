@@ -12,12 +12,7 @@ import api.main as api_main
 from src import llm
 from src import sumarizacao as sz
 
-BOLETIM_OK = """Resumo: Fumaça de queimadas piorou o ar em Manaus. Escolas suspenderam aulas.
-Pontos principais:
-- Manaus teve a pior qualidade do ar do Brasil
-- Aulas foram suspensas
-- A chuva melhorou o ar
-Recomendação: 4"""
+RESUMO_OK = "Fumaça de queimadas piorou o ar em Manaus. Escolas suspenderam aulas."
 
 
 def noticias_exemplo(n: int = 45) -> pd.DataFrame:
@@ -40,15 +35,24 @@ def noticias_exemplo(n: int = 45) -> pd.DataFrame:
 
 
 class GeradorFalso:
-    """Registra os prompts recebidos; devolve fatos na etapa map e o boletim no fim."""
+    """Registra os prompts; cada chamada de fatos devolve 3 fatos diferentes."""
 
-    def __init__(self, boletim: str = BOLETIM_OK):
-        self.prompts, self.boletim = [], boletim
+    def __init__(self, resumo: str = RESUMO_OK):
+        self.prompts, self.resumo = [], resumo
 
     def __call__(self, prompt: str, max_tokens: int) -> dict:
         self.prompts.append(prompt)
-        texto = self.boletim if "Escreva um boletim" in prompt else "- fato A\n- fato B\n- fato C"
+        if "Escreva um resumo" in prompt:
+            texto = self.resumo
+        else:
+            n = len(self.prompts)
+            texto = "\n".join(f"- fato {n}.{i}" for i in range(3))
         return {"resultado": texto, "tokens_gerados": 10, "tempo_s": 0.1}
+
+
+def tipos(gerar) -> list[str]:
+    return ["fatos" if "Liste os 3 fatos" in p else "consolidar" if "Junte esses" in p
+            else "resumo" for p in gerar.prompts]
 
 
 # ---------------------------------------------------------------- preparo
@@ -75,49 +79,76 @@ def test_recortes_padrao_respeitam_o_minimo():
     assert "local-santarem" not in ids  # só 1 notícia
 
 
-# ---------------------------------------------------------------- map-reduce
-def test_um_lote_vai_direto_para_o_boletim():
+# ---------------------------------------------------------------- cadeia de prompts
+def test_um_lote_fatos_e_resumo():
     gerar = GeradorFalso()
     r = sz.sumarizar([f"manchete {i}" for i in range(12)], gerar)
-    assert r.n_lotes == 1 and r.n_chamadas == 1
+    assert tipos(gerar) == ["fatos", "resumo"] and r.n_chamadas == 2
     assert "1. manchete 0" in gerar.prompts[0]  # manchetes numeradas no prompt
+    assert r.boletim.resumo == RESUMO_OK and len(r.boletim.pontos) == 3 and r.boletim.formato_ok
 
 
-def test_varios_lotes_fazem_map_e_depois_reduce():
+def test_varios_lotes_consolidam_ate_3_pontos():
     gerar = GeradorFalso()
-    r = sz.sumarizar([f"manchete {i}" for i in range(45)], gerar)
-    assert r.n_lotes == 3 and r.n_chamadas == 4          # 3 map + 1 reduce
-    assert "Liste os 3 fatos" in gerar.prompts[0]
-    assert "fatos extraídos" in gerar.prompts[-1] and "- fato A" in gerar.prompts[-1]
-    assert r.boletim.formato_ok and len(r.boletim.pontos) == 3
-    assert r.boletim.categoria_recomendacao == "Muito Ruim"
-    assert r.boletim.recomendacao.startswith("Aumento dos sintomas")  # texto oficial, não gerado
+    r = sz.sumarizar([f"manchete {i}" for i in range(45)], gerar)   # 3 lotes = 9 fatos
+    assert tipos(gerar) == ["fatos"] * 3 + ["consolidar", "resumo"]
+    assert r.n_lotes == 3 and len(r.boletim.pontos) == 3 and r.boletim.formato_ok
 
 
-def test_boletim_fora_do_formato_e_sinalizado():
-    b = sz.interpretar_boletim("Manaus teve muita fumaça hoje.")
-    assert not b.formato_ok and b.resumo == "Manaus teve muita fumaça hoje."
+def test_muitos_fatos_consolidam_em_arvore():
+    """231 manchetes = 12 lotes = 36 fatos -> 3 grupos de 12 -> 9 fatos -> 3 pontos."""
+    gerar = GeradorFalso()
+    r = sz.sumarizar([f"manchete {i}" for i in range(231)], gerar)
+    assert tipos(gerar) == ["fatos"] * 12 + ["consolidar"] * 4 + ["resumo"]
+    assert r.n_chamadas == 17
+    assert gerar.prompts[-1].count("\n- fato") <= sz.MAX_FATOS_REDUCE  # resumo recebe <= 12
 
 
-def test_boletim_tolera_negrito_e_numeracao():
-    b = sz.interpretar_boletim("**Resumo:** Ar ruim.\n**Pontos principais:**\n1. Um\n2. Dois\n"
-                               "**Recomendação:** 3")
-    assert b.formato_ok and b.pontos == ["Um", "Dois"] and b.categoria_recomendacao == "Ruim"
+def test_cada_prompt_pede_uma_tarefa_so():
+    """Rodadas 1–3: pedir resumo, lista e escolha juntos quebrava o formato."""
+    assert "Recomendação" not in sz.PROMPT_FATOS + sz.PROMPT_CONSOLIDAR + sz.PROMPT_RESUMO
+    assert "sem lista" in sz.PROMPT_RESUMO
 
 
-@pytest.mark.parametrize("resposta, categoria", [
-    ("4", "Muito Ruim"), ("Orientação 5.", "Péssima"), ("Muito Ruim", "Muito Ruim"),
-    ("ruim", "Ruim"), ("Evite sair da cidade", None),
+def test_resumo_em_lista_e_sinalizado():
+    gerar = GeradorFalso(resumo="- Manaus teve fumaça\n- Aulas suspensas")
+    r = sz.sumarizar([f"manchete {i}" for i in range(5)], gerar)
+    assert not r.boletim.formato_ok and r.boletim.resumo == "Manaus teve fumaça Aulas suspensas"
+
+
+def test_resumo_tira_rotulo():
+    assert sz.limpar_resumo("**Resumo:** Ar ruim em Manaus.") == ("Ar ruim em Manaus.", True)
+
+
+def test_fatos_repetidos_e_sobre_numeracao_sao_removidos():
+    """Rodada 3: o modelo escreveu "Manchetes 3, 4, 5 ... citam Santarém" como se fosse fato."""
+    assert sz._sem_repetir(["Fumaça em Manaus.", "fumaça em manaus", "Aulas suspensas",
+                            "Manchetes 3, 4, 5 citam Santarém"]) == \
+        ["Fumaça em Manaus.", "Aulas suspensas"]
+
+
+# ---------------------------------------------------------------- recomendação por código
+@pytest.mark.parametrize("manchetes, esperado", [
+    (["Manaus tem poluição acima do que é considerado péssimo", "Fumaça em Manaus"],
+     ("Péssima", 1)),                                                 # caso de setembro
+    (["Ar insalubre em Itaituba", "Qualidade do ar crítica em Santarém", "ar perigoso"] +
+     ["outra"] * 7, ("Ruim", 2)),             # Péssima só 1 de 10 (< limiar 2): vale Ruim
+    (["Ar perigoso em Manaus", "Nível péssimo", "Qualidade muito insalubre"] + ["x"] * 7,
+     ("Péssima", 2)),
+    (["Sem categoria aqui"], (None, 0)),
 ])
-def test_recomendacao_e_escolhida_entre_as_oficiais(resposta, categoria):
-    assert sz.escolher_orientacao(resposta) == categoria
+def test_categoria_noticiada(manchetes, esperado):
+    assert sz.categoria_noticiada(manchetes) == esperado
 
 
-def test_recomendacao_inventada_nao_passa():
-    """Rodada 1: o modelo escreveu "Evite sair da cidade"; agora isso vira formato_ok=False."""
-    b = sz.interpretar_boletim("Resumo: Ar ruim.\nPontos principais:\n- Um\n"
-                               "Recomendação: Evite sair da cidade e use máscara.")
-    assert not b.formato_ok and b.recomendacao is None
+def test_resumir_recorte_traz_orientacao_oficial_com_evidencia():
+    df = sz.preparar_noticias(pd.DataFrame([
+        {"titulo": t, "fonte": "G1", "data_publicacao": "2026-10-10 10:00", "link": None,
+         "resumo": "", "termo_busca": "x", "coletado_em": "2026-10-19"}
+        for t in ["Ar perigoso em Manaus", "Nível péssimo em Manaus", "Fumaça em Manaus"]]))
+    b = sz.resumir_recorte(df, GeradorFalso())["boletim"]
+    assert b["categoria_recomendacao"] == "Péssima" and b["manchetes_que_citam_categoria"] == 2
+    assert b["recomendacao"] == sz.RECOMENDACOES["Péssima"]  # texto da norma, não gerado
 
 
 # ---------------------------------------------------------------- fidelidade
@@ -141,7 +172,7 @@ def test_resumir_recorte_junta_texto_estatisticas_e_fontes():
     item = sz.resumir_recorte(df, GeradorFalso(), local="Manaus", max_noticias=25)
     assert item["estatisticas"]["n_noticias"] == 25 and len(item["fontes"]) == 25
     assert item["boletim"]["formato_ok"]
-    assert item["processamento"]["n_chamadas"] == 3  # 2 lotes + reduce
+    assert item["processamento"]["n_chamadas"] == 4  # 2 lotes + consolidação + resumo
     with pytest.raises(ValueError):
         sz.resumir_recorte(df, GeradorFalso(), local="Recife")
 
@@ -203,54 +234,12 @@ def test_rota_sumarizar_sem_modelo_vira_503(api, monkeypatch):
 
 
 def test_rota_sumarizar_boletim_vazio_vira_502(api, monkeypatch):
-    monkeypatch.setattr(api_main, "llm", LLMFalso(gerar=GeradorFalso(boletim="   ")))
+    monkeypatch.setattr(api_main, "llm", LLMFalso(gerar=GeradorFalso(resumo="   ")))
     r = api.post("/sumarizar_noticias", json={"max_noticias": 5})
     assert r.status_code == 502 and r.json()["erro"] == "resposta_invalida_do_modelo"
 
 
-# ---------------------------------------------------------------- correções da rodada 2
-class GeradorFatosUnicos(GeradorFalso):
-    """Cada chamada devolve 3 fatos diferentes, como um modelo de verdade faria."""
-
-    def __call__(self, prompt, max_tokens):
-        self.prompts.append(prompt)
-        if "Escreva um boletim" in prompt:
-            texto = self.boletim
-        else:
-            n = len(self.prompts)
-            texto = "\n".join(f"- fato {n}.{i}" for i in range(3))
-        return {"resultado": texto, "tokens_gerados": 10, "tempo_s": 0.1}
-
-
-def test_muitos_fatos_sao_consolidados_antes_do_boletim():
-    """233 manchetes = 12 lotes = 36 fatos: consolida em grupos de 12 antes do boletim."""
-    gerar = GeradorFatosUnicos()
-    r = sz.sumarizar([f"manchete {i}" for i in range(233)], gerar)
-    consolidacoes = [p for p in gerar.prompts if p.startswith("Abaixo estão fatos") and
-                     "Junte esses fatos" in p]
-    assert r.n_lotes == 12 and len(consolidacoes) == 3          # 36 fatos -> 3 grupos
-    assert r.n_chamadas == 12 + 3 + 1
-    final = gerar.prompts[-1]
-    assert "Escreva um boletim" in final and final.count("\n- fato") <= sz.MAX_FATOS_REDUCE
-
-
-def test_fatos_repetidos_sao_removidos():
-    assert sz._sem_repetir(["Fumaça em Manaus.", "fumaça em manaus", "Aulas suspensas"]) == \
-        ["Fumaça em Manaus.", "Aulas suspensas"]
-
-
-def test_recomendacao_antes_dos_pontos_e_lista_longa_cortada():
-    b = sz.interpretar_boletim("Resumo: Ar péssimo.\nRecomendação: Péssima\nPontos principais:\n"
-                               "- a\n- b\n- c\n- d\n- e")
-    assert b.formato_ok and b.categoria_recomendacao == "Péssima" and b.pontos == ["a", "b", "c"]
-
-
-def test_orientacoes_no_prompt_nao_sao_numeradas():
-    """Rodada 2: orientações 1–5 ao lado de manchetes 1–12 confundiram o modelo."""
-    assert not any(linha[:2] in {"1.", "2.", "3.", "4.", "5."}
-                   for linha in sz.ORIENTACOES.splitlines())
-
-
+# ---------------------------------------------------------------- coerência e filtro
 @pytest.mark.parametrize("categoria, sentimento, esperado", [
     ("Boa", {"negativo": 10, "positivo": 2}, False),         # caso da rodada 2 (setembro)
     ("Péssima", {"negativo": 10, "positivo": 2}, True),
@@ -272,3 +261,13 @@ def test_preparo_remove_paginas_aqi_do_iqair():
          "termo_busca": "x", "coletado_em": "2026-10-19"},
     ])
     assert sz.preparar_noticias(df)["titulo"].str.startswith("Como três").tolist() == [True]
+
+
+def test_sem_fatos_do_modelo_usa_manchetes_mas_sinaliza():
+    class SemLista(GeradorFalso):
+        def __call__(self, prompt, max_tokens):
+            self.prompts.append(prompt)
+            return {"resultado": "texto sem marcadores", "tokens_gerados": 3, "tempo_s": 0.1}
+    r = sz.sumarizar(["Fumaça em Manaus", "Aulas suspensas", "Chuva melhora o ar"], SemLista())
+    assert r.boletim.pontos == ["Fumaça em Manaus", "Aulas suspensas", "Chuva melhora o ar"]
+    assert not r.boletim.formato_ok

@@ -224,14 +224,16 @@ class EstatisticasNoticias(BaseModel):
 class BoletimNoticias(BaseModel):
     resumo: str = Field(..., min_length=1)
     pontos: list[str]
-    recomendacao: str | None = Field(None, description="Orientação oficial de saúde escolhida "
-                                                       "pelo modelo (texto da norma, não gerado).")
+    recomendacao: str | None = Field(None, description="Orientação oficial de saúde (texto da "
+                                                       "norma) da categoria citada nas manchetes.")
     categoria_recomendacao: Categoria | None = Field(
-        None, description="Categoria do IQAr cuja orientação o modelo escolheu.")
+        None, description="Categoria oficial mais grave citada nas manchetes (por código).")
+    manchetes_que_citam_categoria: int = Field(0, ge=0, description="Evidência da escolha.")
     recomendacao_coerente: bool | None = Field(
         None, description="False se a orientação não combina com o sentimento das notícias "
                           "(ex.: 'Boa' com maioria negativa). Vazio sem sentimento calculado.")
-    formato_ok: bool = Field(..., description="False se o modelo não seguiu o formato pedido.")
+    formato_ok: bool = Field(..., description="False se o resumo não veio em texto corrido ou "
+                                              "faltaram pontos.")
 
 
 class Fidelidade(BaseModel):
