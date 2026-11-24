@@ -29,7 +29,7 @@ eter/
 │   └── llm.py                    #   Modeling: carrega o LLM local e executa as tarefas (TP4)
 ├── scripts/
 │   ├── scraping/                 # Data Acquisition: coletores com Beautiful Soup (+ Selenium
-│   │   ├── scrape_iqar.py        #   para a página da CETESB — ver Charter §6)
+│   │   ├── scrape_iqar.py        #   para a página da CETESB — ver Charter §7)
 │   │   └── scrape_noticias.py
 │   ├── prepare_corpus.py         # gera data/processed/corpus_llm.jsonl
 │   └── llm/                      # Modeling (TP4)
@@ -59,7 +59,7 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
 # 1. Coletar os dados da web (rodar separadamente, antes do app)
-python scripts/scraping/scrape_iqar.py       # usa Selenium só para a CETESB (ver Charter §6)
+python scripts/scraping/scrape_iqar.py       # usa Selenium só para a CETESB (ver Charter §7)
 python scripts/scraping/scrape_noticias.py
 
 # 2. (Opcional) preparar o corpus para a próxima entrega (LLM)
@@ -184,7 +184,7 @@ sugestão e o id. Ela também avisa quando a API está fora do ar.
 |---|---|
 | Interface dinâmica, múltiplas páginas | `app.py` + `pages/`, com menu de navegação (`st.navigation`) |
 | Seletor de cidade, perfil, cenários, comparação, filtros, calculadora | Páginas **Monitor** e **Tabela IQAr** |
-| Web scraping (Beautiful Soup + Selenium + pdfplumber) | `scripts/scraping/` → `data/raw/*.csv` e `*.txt`. A tabela oficial do IQAr vem do PDF do MMA (link encontrado com Beautiful Soup, Quadro 1 extraído com pdfplumber e validado); Selenium só para a CETESB (ver Charter §6) |
+| Web scraping (Beautiful Soup + Selenium + pdfplumber) | `scripts/scraping/` → `data/raw/*.csv` e `*.txt`. A tabela oficial do IQAr vem do PDF do MMA (link encontrado com Beautiful Soup, Quadro 1 extraído com pdfplumber e validado); Selenium só para a CETESB (ver Charter §7) |
 | Nuvem de palavras e estatísticas | Página **Notícias e palavras** |
 | API própria (FastAPI) | `api/main.py`: `GET /cidades`, `GET /iqar/tabela`, `GET /iqar/calcular`, `GET`+`POST /leituras` |
 | Preparação para LLM | `src/llm_prep.py` → `data/processed/corpus_llm.jsonl`; visão geral na página **API & IA** |

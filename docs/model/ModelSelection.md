@@ -272,7 +272,7 @@ sentimento não mudou e o formato novo de Q&A é o mesmo que ele já acertava na
 ### Resumo da evolução
 
 > As rodadas 1 a 4 usaram a tabela da CONAMA 491/2018. Depois delas, o projeto passou à
-> CONAMA 506/2024 (Charter §6). O formato do contexto de Q&A é o mesmo; mudam só alguns
+> CONAMA 506/2024 (Charter §7). O formato do contexto de Q&A é o mesmo; mudam só alguns
 > números (MP10, MP2.5 e SO2), e o gabarito do script de avaliação é lido da própria tabela.
 
 
