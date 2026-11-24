@@ -75,7 +75,7 @@ por engenharia de *prompts* e avaliação.
 | Classificação de sentimento pelo LLM | Acerto em conjunto de teste rotulado (12 manchetes) | ≥ 90% | Atingida: 92% |
 | Respostas fiéis à norma | Acerto em perguntas sobre a tabela oficial | 100% | Atingida: 3 de 3 |
 | Tempo de resposta do LLM | Resumo curto na GPU de desenvolvimento (GTX 1050 Ti) | ≤ 15 s | Atingida: ~10 s |
-| Sumarização do noticiário (TP5) | Resumos sem fatos ausentes das notícias de origem, em revisão manual | 0 erros factuais | Em andamento |
+| Sumarização do noticiário (TP5) | Boletins no formato, com fidelidade de 100% na checagem automática e orientação coerente com o sentimento | 9 de 9 recortes | Atingida na rodada 4 (revisão manual ainda aponta exageros pontuais, ver `docs/model/Sumarizacao.md`) |
 | Robustez da API | Falhas devolvidas com código HTTP, mensagem e sugestão | 100% das falhas previstas | Atingida (53 testes automatizados) |
 
 ## 4. Stakeholders
@@ -153,8 +153,8 @@ construída para trocar de modelo só com uma variável de ambiente (`ETER_LLM_M
 |---|---|---|
 | Business Understanding | Este Charter: problema, pergunta de negócio, métricas, alinhamento a ODS e ESG | Concluído |
 | Data Acquisition & Understanding | Scrapers (PDF do MMA, notícias, textos de referência), integração com a OpenWeather, upload e API de leituras, Data Summary Report | Concluído |
-| Modeling | Cálculo do IQAr pela norma oficial; corpus para LLM; seleção e avaliação do LLM local; engenharia de *prompts* (`docs/model/ModelSelection.md`) | Concluído; sumarização do noticiário em andamento (TP5) |
-| Deployment | App Streamlit multipage; API FastAPI com rotas de LLM, respostas validadas e tratamento de erros; dashboard final | Em andamento (dashboard na TP5) |
+| Modeling | Cálculo do IQAr pela norma oficial; corpus para LLM; seleção e avaliação do LLM local; engenharia de *prompts*; sumarização do noticiário em 4 rodadas de avaliação (`docs/model/`) | Concluído |
+| Deployment | App Streamlit multipage com dashboard final ("Do dado ao insight"); API FastAPI com rotas de LLM e sumarização, respostas validadas e tratamento de erros | Concluído |
 | Customer Acceptance | Validação com exemplos reais, testes automatizados e apresentação da solução | Em andamento (TP5) |
 
 ### Entregas por trabalho prático

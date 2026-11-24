@@ -114,6 +114,17 @@ curl -X POST http://127.0.0.1:8000/processar_texto -H "Content-Type: application
 
 No app, a aba **API & IA → LLM local** faz o mesmo com um formulário. Testes: `pytest -q`.
 
+### Dashboard final (TP5)
+
+A página inicial do app, **Do dado ao insight** (`pages/dashboard.py`), mostra o ciclo completo:
+
+- **Panorama:** quantas notícias foram coletadas, limpas e classificadas pela IA; insights calculados (tom do noticiário, local mais citado, pico, gravidade relatada); gráficos por dia e sentimento, por local, por categoria do IQAr citada e por veículo.
+- **Boletins da IA:** o boletim de cada recorte (resumo, pontos principais, orientação oficial com a evidência, fidelidade, compressão e sentimento), as manchetes de origem para conferir e, para capitais monitoradas, a medição atual de poluentes.
+- **Gerar agora:** pede um boletim novo ao LLM local, em tempo real, pela API (`POST /sumarizar_noticias`).
+- **Dados:** as notícias processadas, com download em CSV.
+
+Os boletins prontos vêm de `data/processed/insights/` (versionados), então o dashboard funciona mesmo sem o modelo instalado; só a aba **Gerar agora** precisa da API com o LLM.
+
 ### Sumarização do noticiário (TP5)
 
 O LLM local resume as notícias coletadas por recorte (local, mês, tema) em boletins com resumo,
@@ -205,6 +216,8 @@ sugestão e o id. Ela também avisa quando a API está fora do ar.
 | Nuvem de palavras e estatísticas | Página **Notícias e palavras** |
 | API própria (FastAPI) | `api/main.py`: `GET /cidades`, `GET /iqar/tabela`, `GET /iqar/calcular`, `GET`+`POST /leituras` |
 | Preparação para LLM | `src/llm_prep.py` → `data/processed/corpus_llm.jsonl`; visão geral na página **API & IA** |
+| Dashboard final com IA (TP5) | `pages/dashboard.py`: panorama, boletins da IA, geração em tempo real pela API e dados processados |
+| Sumarização do noticiário (TP5) | `src/sumarizacao.py`, `scripts/llm/sumarizar_noticias.py`, `POST /sumarizar_noticias` |
 | LLM local + FastAPI (TP4) | `src/llm.py` + `POST /processar_texto` (resumo, sentimento, pergunta); escolha do modelo em `docs/model/ModelSelection.md` |
 | Cache | `@st.cache_data` em `src/state.py` (API OpenWeather, leitura de arquivos, nuvem de palavras) |
 | Estado de sessão | Histórico de consultas, última avaliação, dados enviados, arquivos já importados |

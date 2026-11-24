@@ -14,8 +14,11 @@ st.set_page_config(page_title="Éter - Monitor", page_icon="🌬️", layout="wi
 state.iniciar_estado()
 
 paginas = {
+    "Visão geral": [
+        st.Page("pages/dashboard.py", title="Do dado ao insight", icon="🧭", default=True),
+    ],
     "Qualidade do ar": [
-        st.Page("pages/monitor.py", title="Monitor", icon="📍", default=True),
+        st.Page("pages/monitor.py", title="Monitor", icon="📍"),
         st.Page("pages/noticias.py", title="Notícias e palavras", icon="📰"),
         st.Page("pages/referencia.py", title="Tabela IQAr", icon="📋"),
     ],

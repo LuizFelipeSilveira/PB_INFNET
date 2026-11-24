@@ -196,6 +196,15 @@ def estatisticas(df: pd.DataFrame) -> dict:
 
 
 # ---------------------------------------------------------------- recomendação (código)
+def categoria_da_manchete(titulo: str) -> str | None:
+    """Categoria oficial mais grave que a manchete menciona (ou None)."""
+    alvo = sem_acento(titulo)
+    for categoria, padrao in TERMOS_CATEGORIA:
+        if re.search(padrao, alvo):
+            return categoria
+    return None
+
+
 def categoria_noticiada(manchetes: list[str]) -> tuple[str | None, int]:
     """Categoria oficial citada nas manchetes e quantas manchetes a citam.
 
@@ -205,11 +214,9 @@ def categoria_noticiada(manchetes: list[str]) -> tuple[str | None, int]:
     """
     contagem = {}
     for titulo in manchetes:
-        alvo = sem_acento(titulo)
-        for categoria, padrao in TERMOS_CATEGORIA:
-            if re.search(padrao, alvo):
-                contagem[categoria] = contagem.get(categoria, 0) + 1
-                break
+        categoria = categoria_da_manchete(titulo)
+        if categoria:
+            contagem[categoria] = contagem.get(categoria, 0) + 1
     if not contagem:
         return None, 0
     ordem = [c for c, _ in TERMOS_CATEGORIA]
