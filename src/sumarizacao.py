@@ -29,6 +29,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from src.iqar import CATEGORIAS, RECOMENDACOES
 from src.llm import sem_acento
 
 TAMANHO_LOTE = 20          # manchetes por chamada na etapa map
@@ -43,6 +44,11 @@ LOCAIS = [
     "Recife", "Fortaleza", "São Luís", "Teresina", "Natal", "João Pessoa", "Maceió", "Aracaju",
 ]
 OUTROS_LOCAIS = "Outros locais"
+# Estados (e regiões) também são nomes próprios que o modelo pode trocar entre si.
+ESTADOS = ["Acre", "Alagoas", "Amapá", "Amazonas", "Bahia", "Ceará", "Distrito Federal",
+           "Espírito Santo", "Goiás", "Maranhão", "Mato Grosso", "Minas Gerais", "Pará",
+           "Paraíba", "Paraná", "Pernambuco", "Piauí", "Rondônia", "Roraima", "Tocantins",
+           "Sergipe", "Santa Catarina", "Amazônia", "Pantanal", "Cerrado"]
 
 # Páginas fixas de índice do IQAir que o feed traz como se fossem notícias.
 _PAGINA_INDICE = re.compile(r"^Qualidade do ar em [^:|]+$", re.IGNORECASE)
@@ -63,11 +69,16 @@ Regras:
 - use somente informações das manchetes;
 - escreva cada fato em uma linha, começando com "- ";
 - cite o local e os números quando as manchetes trouxerem;
+- escreva o local exatamente como na manchete (não troque um estado por uma cidade);
+- ao citar um número, repita a palavra que vem junto dele na manchete;
 - não repita fatos parecidos."""
 
 PROMPT_BOLETIM = """Abaixo estão {tipo_entrada} sobre qualidade do ar{recorte}.
 
 {conteudo}
+
+Orientações oficiais de saúde:
+{orientacoes}
 
 Escreva um boletim exatamente neste formato:
 Resumo: <duas frases sobre o que aconteceu>
@@ -75,9 +86,17 @@ Pontos principais:
 - <fato 1>
 - <fato 2>
 - <fato 3>
-Recomendação: <uma frase dizendo o que a população deve fazer>
+Recomendação: <só o número, de 1 a 5, da orientação oficial que combina com a situação relatada>
 
-Use somente as informações acima. Não invente números, datas nem locais."""
+Use somente as informações acima. Não invente números, datas nem locais. Escreva os locais e os
+números exatamente como aparecem acima."""
+
+# A recomendação de saúde vem da norma (src/iqar.py), não é escrita pelo modelo: na
+# rodada 1 ele sugeriu "evite sair da cidade", um conselho inadequado. O modelo só
+# escolhe qual das 5 orientações oficiais combina com o noticiário (escolha fechada,
+# como na classificação de sentimento).
+ORIENTACOES = "\n".join(f"{i}. {cat}: {RECOMENDACOES[cat]}"
+                         for i, cat in enumerate(CATEGORIAS, 1))
 
 
 # ---------------------------------------------------------------- preparo dos dados
@@ -172,7 +191,8 @@ def estatisticas(df: pd.DataFrame) -> dict:
 class Boletim:
     resumo: str
     pontos: list[str]
-    recomendacao: str | None
+    recomendacao: str | None           # texto oficial da orientação escolhida
+    categoria_recomendacao: str | None  # categoria do IQAr dessa orientação
     texto_bruto: str
     formato_ok: bool  # o modelo seguiu o formato pedido?
 
@@ -197,20 +217,38 @@ def _linhas_com_marcador(texto: str) -> list[str]:
             if re.match(r"^\s*(?:[-*•]|\d+[.)])\s+\S", linha)]
 
 
+def escolher_orientacao(resposta: str | None) -> str | None:
+    """Categoria escolhida pelo modelo: aceita o número (1–5) ou o nome da categoria."""
+    if not resposta:
+        return None
+    numero = re.search(r"\b([1-5])\b", resposta)
+    if numero:
+        return CATEGORIAS[int(numero.group(1)) - 1]
+    alvo = sem_acento(resposta)
+    for cat in sorted(CATEGORIAS, key=len, reverse=True):  # "Muito Ruim" antes de "Ruim"
+        if sem_acento(cat) in alvo:
+            return cat
+    return None
+
+
 def interpretar_boletim(texto: str) -> Boletim:
     """Separa Resumo / Pontos principais / Recomendação. Tolera pequenas variações."""
     norm = texto.replace("**", "")
     resumo = re.search(r"Resumo\s*:\s*(.+?)(?=\n\s*Pontos|\n\s*Recomenda|\Z)", norm, re.S | re.I)
     pontos = re.search(r"Pontos principais\s*:?\s*\n(.+?)(?=\n\s*Recomenda|\Z)", norm, re.S | re.I)
     recom = re.search(r"Recomenda(?:ção|cao)\s*:\s*(.+)", norm, re.S | re.I)
+    categoria = escolher_orientacao(recom.group(1) if recom else None)
+    oficial = RECOMENDACOES[categoria] if categoria else None
     lista = _linhas_com_marcador(pontos.group(1)) if pontos else []
     if resumo and lista:
         return Boletim(resumo=" ".join(resumo.group(1).split()), pontos=lista[:5],
-                       recomendacao=" ".join(recom.group(1).split()) if recom else None,
-                       texto_bruto=texto, formato_ok=True)
+                       recomendacao=oficial, categoria_recomendacao=categoria,
+                       texto_bruto=texto, formato_ok=categoria is not None)
     # Fora do formato: aproveita o texto inteiro como resumo, mas sinaliza.
-    return Boletim(resumo=" ".join(norm.split()), pontos=_linhas_com_marcador(norm)[:5],
-                   recomendacao=None, texto_bruto=texto, formato_ok=False)
+    corpo = re.split(r"\n\s*Recomenda", norm, flags=re.I)[0]
+    return Boletim(resumo=" ".join(corpo.split()), pontos=_linhas_com_marcador(corpo)[:5],
+                   recomendacao=oficial, categoria_recomendacao=categoria,
+                   texto_bruto=texto, formato_ok=False)
 
 
 def sumarizar(manchetes: list[str], gerar, recorte: str = "",
@@ -228,7 +266,8 @@ def sumarizar(manchetes: list[str], gerar, recorte: str = "",
 
     if len(lotes) == 1:
         prompt = PROMPT_BOLETIM.format(tipo_entrada="manchetes de notícias, numeradas",
-                                       recorte=recorte, conteudo=_numerar(lotes[0]))
+                                       recorte=recorte, conteudo=_numerar(lotes[0]),
+                                       orientacoes=ORIENTACOES)
     else:
         for lote in lotes:  # etapa map
             saida = gerar(PROMPT_FATOS.format(recorte=recorte, manchetes=_numerar(lote)),
@@ -237,7 +276,7 @@ def sumarizar(manchetes: list[str], gerar, recorte: str = "",
             fatos += _linhas_com_marcador(saida["resultado"]) or [saida["resultado"].strip()]
         prompt = PROMPT_BOLETIM.format(  # etapa reduce
             tipo_entrada="fatos extraídos de notícias", recorte=recorte,
-            conteudo="\n".join(f"- {f}" for f in fatos))
+            conteudo="\n".join(f"- {f}" for f in fatos), orientacoes=ORIENTACOES)
     saida = gerar(prompt, MAX_TOKENS_BOLETIM)
     tokens, chamadas = tokens + saida["tokens_gerados"], chamadas + 1
     return ResultadoSumarizacao(
@@ -269,6 +308,11 @@ def verificar_fidelidade(texto: str, fontes: list[str]) -> dict:
         palavra = m.group(1)
         if sem_acento(palavra) not in _PALAVRAS_DE_FORMATO:
             termos.add(("nome", palavra))
+    # No início de frase, a maiúscula não indica nome próprio; ali só checa locais
+    # conhecidos (na rodada 1, "Manaus" no lugar de "Amazonas" passou sem ser visto).
+    for local in LOCAIS + ESTADOS:
+        if re.search(rf"\b{re.escape(local)}\b", texto):
+            termos.add(("nome", local))
     nao_encontrados = []
     for tipo, termo in sorted(termos):
         if tipo == "numero":
@@ -323,12 +367,13 @@ def resumir_recorte(df: pd.DataFrame, gerar, local: str | None = None, mes: str 
     manchetes = selecao["titulo"].tolist()
     resultado = sumarizar(manchetes, gerar, recorte=descrever_recorte(local, mes, tema))
     b = resultado.boletim
-    texto_gerado = " ".join([b.resumo, *b.pontos, b.recomendacao or ""])
+    texto_gerado = " ".join([b.resumo, *b.pontos])
     return {
         "filtros": {"local": local, "mes": mes, "tema": tema, "max_noticias": max_noticias},
         "descricao": descrever_recorte(local, mes, tema).strip() or "todas as notícias",
         "estatisticas": estatisticas(selecao),
         "boletim": {"resumo": b.resumo, "pontos": b.pontos, "recomendacao": b.recomendacao,
+                    "categoria_recomendacao": b.categoria_recomendacao,
                     "formato_ok": b.formato_ok},
         # a recomendação é orientação geral de saúde, não fato noticiado: fica fora da checagem
         "fidelidade": verificar_fidelidade(" ".join([b.resumo, *b.pontos]), manchetes),

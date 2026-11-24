@@ -224,7 +224,10 @@ class EstatisticasNoticias(BaseModel):
 class BoletimNoticias(BaseModel):
     resumo: str = Field(..., min_length=1)
     pontos: list[str]
-    recomendacao: str | None = None
+    recomendacao: str | None = Field(None, description="Orientação oficial de saúde escolhida "
+                                                       "pelo modelo (texto da norma, não gerado).")
+    categoria_recomendacao: Categoria | None = Field(
+        None, description="Categoria do IQAr cuja orientação o modelo escolheu.")
     formato_ok: bool = Field(..., description="False se o modelo não seguiu o formato pedido.")
 
 

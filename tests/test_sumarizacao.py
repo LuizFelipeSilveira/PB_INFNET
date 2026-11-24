@@ -17,7 +17,7 @@ Pontos principais:
 - Manaus teve a pior qualidade do ar do Brasil
 - Aulas foram suspensas
 - A chuva melhorou o ar
-Recomendação: Evite atividades ao ar livre enquanto houver fumaça."""
+Recomendação: 4"""
 
 
 def noticias_exemplo(n: int = 45) -> pd.DataFrame:
@@ -90,7 +90,8 @@ def test_varios_lotes_fazem_map_e_depois_reduce():
     assert "Liste os 3 fatos" in gerar.prompts[0]
     assert "fatos extraídos" in gerar.prompts[-1] and "- fato A" in gerar.prompts[-1]
     assert r.boletim.formato_ok and len(r.boletim.pontos) == 3
-    assert r.boletim.recomendacao.startswith("Evite")
+    assert r.boletim.categoria_recomendacao == "Muito Ruim"
+    assert r.boletim.recomendacao.startswith("Aumento dos sintomas")  # texto oficial, não gerado
 
 
 def test_boletim_fora_do_formato_e_sinalizado():
@@ -100,8 +101,23 @@ def test_boletim_fora_do_formato_e_sinalizado():
 
 def test_boletim_tolera_negrito_e_numeracao():
     b = sz.interpretar_boletim("**Resumo:** Ar ruim.\n**Pontos principais:**\n1. Um\n2. Dois\n"
-                               "**Recomendação:** Fique em casa.")
-    assert b.formato_ok and b.pontos == ["Um", "Dois"] and b.recomendacao == "Fique em casa."
+                               "**Recomendação:** 3")
+    assert b.formato_ok and b.pontos == ["Um", "Dois"] and b.categoria_recomendacao == "Ruim"
+
+
+@pytest.mark.parametrize("resposta, categoria", [
+    ("4", "Muito Ruim"), ("Orientação 5.", "Péssima"), ("Muito Ruim", "Muito Ruim"),
+    ("ruim", "Ruim"), ("Evite sair da cidade", None),
+])
+def test_recomendacao_e_escolhida_entre_as_oficiais(resposta, categoria):
+    assert sz.escolher_orientacao(resposta) == categoria
+
+
+def test_recomendacao_inventada_nao_passa():
+    """Rodada 1: o modelo escreveu "Evite sair da cidade"; agora isso vira formato_ok=False."""
+    b = sz.interpretar_boletim("Resumo: Ar ruim.\nPontos principais:\n- Um\n"
+                               "Recomendação: Evite sair da cidade e use máscara.")
+    assert not b.formato_ok and b.recomendacao is None
 
 
 # ---------------------------------------------------------------- fidelidade
@@ -114,6 +130,10 @@ def test_fidelidade_aponta_numeros_e_nomes_ausentes_das_fontes():
                                    fontes)
     assert set(ruim["nao_encontrados"]) == {"Belém", "12"}
     assert 0 < ruim["taxa"] < 1
+    # Rodada 1: "Manaus" no início da frase, no lugar de "Amazonas", passava sem ser visto
+    troca = sz.verificar_fidelidade("Manaus tem 10 municípios sob alerta.",
+                                    ["Amazonas tem 10 municípios sob alerta severo"])
+    assert troca["nao_encontrados"] == ["Manaus"]
 
 
 def test_resumir_recorte_junta_texto_estatisticas_e_fontes():

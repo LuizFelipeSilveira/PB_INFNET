@@ -29,7 +29,9 @@ resume em duas etapas:
 1. **Map:** as manchetes do recorte são divididas em lotes de até 20. Cada lote vira uma lista de
    3 fatos.
 2. **Reduce:** os fatos de todos os lotes viram um boletim com formato fixo: **Resumo** (duas
-   frases), **Pontos principais** (três itens) e **Recomendação** (uma frase).
+   frases), **Pontos principais** (três itens) e **Recomendação**. A recomendação não é escrita
+   pelo modelo: ele escolhe qual das 5 orientações oficiais de saúde (uma por categoria do IQAr)
+   combina com o noticiário, e o boletim traz o texto da norma (seção 7).
 
 Recortes com até 20 manchetes vão direto para o boletim, numa chamada só.
 
@@ -49,6 +51,8 @@ As lições das quatro rodadas de avaliação da TP4 orientaram os *prompts* da 
 | Formato de saída exato, com rótulos (`Resumo:`, `Pontos principais:`, `Recomendação:`) | Permite separar as partes por código e verificar se o modelo obedeceu (`formato_ok`) |
 | Pedido de exatamente 3 fatos por lote | Limita o tamanho da saída e força a escolha do que é mais importante |
 | "Cite o local e os números quando as manchetes trouxerem" | Resumos sem local e sem números são vagos e pouco acionáveis |
+| "Escreva o local exatamente como na manchete" e "repita a palavra que vem junto do número" | Rodada 1: o modelo trocou Amazonas por Manaus e transformou "964% na poluição" em "964% na qualidade do ar" |
+| Recomendação por **escolha fechada** entre as 5 orientações oficiais (responde só o número) | Rodada 1: o modelo recomendou "evite sair da cidade". Escolher numa lista, como na classificação de sentimento, é o que um modelo pequeno faz com mais acerto, e o texto final é o da norma |
 | Decodificação determinística (`do_sample=False`) | Mesma entrada, mesmo boletim: resultados reproduzíveis |
 
 Os *prompts* completos estão em `src/sumarizacao.py` (`PROMPT_FATOS` e `PROMPT_BOLETIM`).
@@ -57,14 +61,15 @@ Os *prompts* completos estão em `src/sumarizacao.py` (`PROMPT_FATOS` e `PROMPT_
 
 | Métrica | Como é calculada | Para que serve |
 |---|---|---|
-| `formato_ok` | o código encontrou Resumo e Pontos principais na saída | mostra se o modelo seguiu as instruções |
-| Fidelidade (`taxa`) | fração dos números e nomes próprios do boletim que aparecem nas manchetes de origem | aponta possíveis invenções (`nao_encontrados`) para conferir |
+| `formato_ok` | o código encontrou Resumo, Pontos principais e uma orientação oficial válida (1 a 5) | mostra se o modelo seguiu as instruções |
+| Fidelidade (`taxa`) | fração dos números, nomes próprios e locais conhecidos (capitais e estados, mesmo no início da frase) do boletim que aparecem nas manchetes de origem | aponta possíveis invenções (`nao_encontrados`) para conferir |
 | Taxa de compressão | palavras do boletim / palavras das manchetes | mede o quanto a leitura foi reduzida |
 | Revisão manual | leitura dos boletins ao lado das fontes | detecta erros que a checagem automática não pega (ex.: causa invertida) |
 
 A checagem de fidelidade é simples de propósito: não prova que o resumo está certo, mas é barata,
-roda em todo boletim e diz exatamente o que conferir. A recomendação fica fora dela, porque é uma
-orientação de saúde, e não um fato noticiado.
+roda em todo boletim e diz exatamente o que conferir. Ela não pega uma palavra trocada ao lado de
+um número correto (ex.: "poluição" por "qualidade do ar"); por isso a revisão manual continua
+fazendo parte da avaliação.
 
 ## 6. Como rodar
 
@@ -91,10 +96,51 @@ curl -X POST http://127.0.0.1:8000/sumarizar_noticias -H "Content-Type: applicat
 
 ## 7. Resultados
 
-*A preencher com a execução de `scripts/llm/sumarizar_noticias.py` na GPU de desenvolvimento.*
+### Rodada 1 (23/11/2026, Qwen3.5-0.8B em FP16 na GTX 1050 Ti, 233 notícias)
 
-| Recorte | Notícias | Chamadas | Tempo (s) | `formato_ok` | Fidelidade | Compressão |
+| Recorte | Notícias | Chamadas | Tempo (s) | `formato_ok` | Fidelidade (checagem da rodada) | Compressão |
+|---|---|---|---|---|---|---|
+| Panorama geral | 233 | 13 | 147,3 | sim | 100% | 2% |
+| Local: Manaus | 130 | 8 | 74,6 | sim | 75% ("República") | 3% |
+| Local: outros locais | 88 | 6 | 63,1 | sim | 100% | 6% |
+| Mês: 09/2026 | 12 | 1 | 6,8 | sim | 100% | 39% |
+| Mês: 10/2026 | 203 | 12 | 103,4 | sim | 100% | 3% |
+| Tema: qualidade do ar | 91 | 6 | 44,8 | sim | 100% | 6% |
+| Tema: queimadas fumaça | 71 | 5 | 35,5 | sim | 100% | 9% |
+| Tema: poluição do ar | 59 | 4 | 35,5 | sim | 100% | 9% |
+| Tema: índice de qualidade do ar | 12 | 1 | 9,7 | sim | 100% | 55% |
+
+Os 9 boletins seguiram o formato e foram gerados em cerca de 9 minutos no total, sem contar a
+classificação de sentimento. O sentimento das 233 notícias válidas ficou em 204 negativas, 23
+positivas e 6 neutras.
+
+**Revisão manual** (cada afirmação conferida nas manchetes de origem):
+
+- **Corretos:** "pior qualidade do ar do mundo", "índice de 637", "38 mil focos", "23 vezes acima
+  do limite da OMS", "11 suspeitos presos", "Aparecida tem a maior concentração de partículas",
+  "Manaus cancela eventos ao ar livre", "governo investiga a origem dos incêndios".
+- **Erros encontrados:**
+
+| Recorte | Erro | Manchete de origem | Pego pela checagem automática? |
+|---|---|---|---|
+| Local: Manaus | "Avenida da República" | "avenida na Zona Norte de Manaus" | sim |
+| Local: outros locais | "Manaus tem 10 municípios sob alerta" | "Amazonas tem 10 municípios sob alerta severo" | não (passou a pegar, ver abaixo) |
+| Mês: 09/2026 | "964% de aumento na qualidade do ar" | "alta de 964% na poluição do ar" | não |
+| Manaus, qualidade do ar, índice | recomendação "evite sair da cidade" | — | não se aplica |
+
+**Correções para a rodada 2:**
+
+1. **Recomendação por escolha fechada:** o modelo escolhe uma das 5 orientações oficiais (responde
+   o número), e o boletim mostra o texto da norma. Uma resposta fora da lista vira
+   `formato_ok = false`.
+2. **Regras novas nos *prompts*:** manter o local exatamente como na manchete e repetir a palavra
+   que acompanha cada número.
+3. **Checagem de fidelidade ampliada:** passa a conferir capitais e estados mesmo no início da
+   frase. Reaplicada aos boletins da rodada 1, ela agora aponta "Manaus" no recorte "outros
+   locais" (fidelidade de 100% para 75%).
+
+### Rodada 2 (a preencher)
+
+| Recorte | Notícias | Chamadas | Tempo (s) | `formato_ok` | Fidelidade | Orientação escolhida |
 |---|---|---|---|---|---|---|
 | | | | | | | |
-
-Revisão manual: *a preencher.*
