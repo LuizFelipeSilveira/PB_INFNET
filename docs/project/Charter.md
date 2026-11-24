@@ -155,7 +155,7 @@ construída para trocar de modelo só com uma variável de ambiente (`ETER_LLM_M
 | Data Acquisition & Understanding | Scrapers (PDF do MMA, notícias, textos de referência), integração com a OpenWeather, upload e API de leituras, Data Summary Report | Concluído |
 | Modeling | Cálculo do IQAr pela norma oficial; corpus para LLM; seleção e avaliação do LLM local; engenharia de *prompts*; sumarização do noticiário em 4 rodadas de avaliação (`docs/model/`) | Concluído |
 | Deployment | App Streamlit multipage com dashboard final ("Do dado ao insight"); API FastAPI com rotas de LLM e sumarização, respostas validadas e tratamento de erros | Concluído |
-| Customer Acceptance | Validação com exemplos reais, testes automatizados e apresentação da solução | Em andamento (TP5) |
+| Customer Acceptance | Validação com dados reais, 87 testes automatizados, relatório de encerramento (`docs/project/ExitReport.md`) e apresentação | Concluído |
 
 ### Entregas por trabalho prático
 

@@ -44,6 +44,7 @@ eter/
 ├── notebooks/                    # Data Understanding: análises exploratórias
 ├── docs/
 │   ├── project/Charter.md        # Business Understanding
+│   ├── project/ExitReport.md     # Customer Acceptance: relatório de encerramento (TP5)
 │   ├── data_report/DataSummaryReport.md
 │   └── model/
 │       ├── ModelSelection.md     # Modeling: escolha e justificativa do LLM local
