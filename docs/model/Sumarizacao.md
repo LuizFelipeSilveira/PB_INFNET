@@ -210,8 +210,43 @@ categoria mais grave citada nas manchetes. Aplicada às fontes da rodada 3, essa
 | Tema: poluição do ar | Ruim | 2 de 58 | sim |
 | Tema: índice de qualidade do ar | Péssima (empate de 1 citação entre três categorias; vale a mais grave) | 1 de 11 | sim |
 
-### Rodada 4 (a preencher)
+### Rodada 4 (23/11/2026): resultado final
 
 | Recorte | Notícias | Chamadas | Tempo (s) | `formato_ok` | Fidelidade | Orientação | Coerente |
 |---|---|---|---|---|---|---|---|
-| | | | | | | | |
+| Panorama geral | 231 | 17 | 167,9 | sim | 100% | Péssima (24 manchetes) | sim |
+| Local: Manaus | 130 | 11 | 82,0 | sim | 100% | Péssima (23) | sim |
+| Local: outros locais | 86 | 9 | 80,5 | sim | 100% | Ruim (2) | sim |
+| Mês: 09/2026 | 12 | 2 | 13,9 | sim | 100% | Péssima (1) | sim |
+| Mês: 10/2026 | 203 | 16 | 171,8 | sim | 100% | Péssima (23) | sim |
+| Tema: qualidade do ar | 91 | 9 | 87,5 | sim | 100% | Péssima (18) | sim |
+| Tema: queimadas fumaça | 71 | 6 | 53,5 | sim | 100% | Péssima (4) | sim |
+| Tema: poluição do ar | 58 | 5 | 47,5 | sim | 100% | Ruim (2) | sim |
+| Tema: índice de qualidade do ar | 11 | 2 | 13,1 | sim | 100% | Péssima (1) | sim |
+
+Os 9 boletins (de 231 notícias) foram gerados em cerca de 12 minutos, com taxa de compressão de 2%
+a 37%: no panorama geral, 3.041 palavras de manchetes viram 3 pontos e um resumo de duas frases.
+
+**Evolução das rodadas:**
+
+| Rodada | Abordagem | `formato_ok` | Fidelidade 100% | Orientação coerente |
+|---|---|---|---|---|
+| 1 | um *prompt* com tudo; recomendação em texto livre | 9/9 | 8/9 | — (texto livre inadequado em 3) |
+| 2 | + escolha da orientação por número | 7/9 | 8/9 | 6/7 |
+| 3 | + consolidação em árvore; escolha por nome | 7/9 | 8/9 | 4/7 |
+| 4 | cadeia de *prompts* de uma tarefa; orientação por código | **9/9** | **9/9** | **9/9** |
+
+**Revisão manual:** os fatos centrais conferem com as manchetes (incêndios no oeste do Pará,
+suspensão de aulas em Manaus, 11 suspeitos presos, 191 focos em 48 horas, poluição "acima do
+péssimo", ranking global). Limitações que permanecem:
+
+- **Exageros pontuais:** "pescadores perdem vidas", quando a manchete diz que eles "se perdem" por
+  causa da fumaça.
+- **Local generalizado:** o prefixo "Manaus:" em fatos do interior do Amazonas; "cidade de
+  Aparecida" para um bairro de Manaus.
+- **Fato pouco relevante:** um resumo menciona ferramentas para jornalistas, notícia que entrou no
+  recorte pelo termo de busca.
+
+Esses erros não alteram números nem locais centrais (a checagem de fidelidade não apontou nada),
+mas mostram por que o dashboard exibe as manchetes de origem ao lado de cada boletim: o leitor
+pode conferir o que o modelo escreveu.
