@@ -228,6 +228,9 @@ class BoletimNoticias(BaseModel):
                                                        "pelo modelo (texto da norma, não gerado).")
     categoria_recomendacao: Categoria | None = Field(
         None, description="Categoria do IQAr cuja orientação o modelo escolheu.")
+    recomendacao_coerente: bool | None = Field(
+        None, description="False se a orientação não combina com o sentimento das notícias "
+                          "(ex.: 'Boa' com maioria negativa). Vazio sem sentimento calculado.")
     formato_ok: bool = Field(..., description="False se o modelo não seguiu o formato pedido.")
 
 

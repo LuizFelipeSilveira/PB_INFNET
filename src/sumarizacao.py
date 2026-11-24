@@ -33,6 +33,7 @@ from src.iqar import CATEGORIAS, RECOMENDACOES
 from src.llm import sem_acento
 
 TAMANHO_LOTE = 20          # manchetes por chamada na etapa map
+MAX_FATOS_REDUCE = 12      # acima disso, os fatos são consolidados antes do boletim
 MAX_TOKENS_FATOS = 160
 MAX_TOKENS_BOLETIM = 230
 
@@ -50,8 +51,9 @@ ESTADOS = ["Acre", "Alagoas", "Amapá", "Amazonas", "Bahia", "Ceará", "Distrito
            "Paraíba", "Paraná", "Pernambuco", "Piauí", "Rondônia", "Roraima", "Tocantins",
            "Sergipe", "Santa Catarina", "Amazônia", "Pantanal", "Cerrado"]
 
-# Páginas fixas de índice do IQAir que o feed traz como se fossem notícias.
-_PAGINA_INDICE = re.compile(r"^Qualidade do ar em [^:|]+$", re.IGNORECASE)
+# Páginas fixas de índice do IQAir que o feed traz como se fossem notícias:
+# "Qualidade do ar em Campinas" e "Índice de Qualidade do Ar (AQI) ... | IQAir Brasil".
+_PAGINA_INDICE = re.compile(r"^Qualidade do ar em [^:|]+$|\|\s*IQAir", re.IGNORECASE)
 
 
 # ---------------------------------------------------------------- prompts
@@ -73,6 +75,16 @@ Regras:
 - ao citar um número, repita a palavra que vem junto dele na manchete;
 - não repita fatos parecidos."""
 
+PROMPT_CONSOLIDAR = """Abaixo estão fatos extraídos de notícias sobre qualidade do ar{recorte}.
+
+{fatos}
+
+Junte esses fatos nos 3 mais importantes, sem repetir.
+Regras:
+- use somente os fatos acima;
+- escreva cada fato em uma linha, começando com "- ";
+- mantenha locais e números exatamente como estão acima."""
+
 PROMPT_BOLETIM = """Abaixo estão {tipo_entrada} sobre qualidade do ar{recorte}.
 
 {conteudo}
@@ -80,13 +92,13 @@ PROMPT_BOLETIM = """Abaixo estão {tipo_entrada} sobre qualidade do ar{recorte}.
 Orientações oficiais de saúde:
 {orientacoes}
 
-Escreva um boletim exatamente neste formato:
+Escreva um boletim exatamente neste formato, com exatamente 3 pontos:
 Resumo: <duas frases sobre o que aconteceu>
+Recomendação: <só o nome da categoria da orientação oficial que combina com a situação relatada>
 Pontos principais:
 - <fato 1>
 - <fato 2>
 - <fato 3>
-Recomendação: <só o número, de 1 a 5, da orientação oficial que combina com a situação relatada>
 
 Use somente as informações acima. Não invente números, datas nem locais. Escreva os locais e os
 números exatamente como aparecem acima."""
@@ -94,9 +106,10 @@ números exatamente como aparecem acima."""
 # A recomendação de saúde vem da norma (src/iqar.py), não é escrita pelo modelo: na
 # rodada 1 ele sugeriu "evite sair da cidade", um conselho inadequado. O modelo só
 # escolhe qual das 5 orientações oficiais combina com o noticiário (escolha fechada,
-# como na classificação de sentimento).
-ORIENTACOES = "\n".join(f"{i}. {cat}: {RECOMENDACOES[cat]}"
-                         for i, cat in enumerate(CATEGORIAS, 1))
+# como na classificação de sentimento). Rodada 2: com orientações numeradas ao lado de
+# manchetes numeradas, o modelo confundiu as listas; por isso a escolha é pelo nome.
+# A recomendação vem antes dos pontos para não ser cortada quando a saída se alonga.
+ORIENTACOES = "\n".join(f"- {cat}: {RECOMENDACOES[cat]}" for cat in CATEGORIAS)
 
 
 # ---------------------------------------------------------------- preparo dos dados
@@ -114,7 +127,7 @@ def preparar_noticias(noticias: pd.DataFrame) -> pd.DataFrame:
     # Só as do IQAir: veículos de notícia também usam títulos como "Qualidade do ar em
     # Manaus" em matérias de verdade.
     pagina_indice = (df["fonte"].fillna("").str.casefold() == "iqair") & \
-        df["titulo"].fillna("").str.strip().str.match(_PAGINA_INDICE)
+        df["titulo"].fillna("").str.strip().str.contains(_PAGINA_INDICE)
     df = df[~pagina_indice]
     df = df.drop_duplicates("titulo")
     df["data"] = pd.to_datetime(df["data_publicacao"], errors="coerce")
@@ -235,20 +248,31 @@ def interpretar_boletim(texto: str) -> Boletim:
     """Separa Resumo / Pontos principais / Recomendação. Tolera pequenas variações."""
     norm = texto.replace("**", "")
     resumo = re.search(r"Resumo\s*:\s*(.+?)(?=\n\s*Pontos|\n\s*Recomenda|\Z)", norm, re.S | re.I)
-    pontos = re.search(r"Pontos principais\s*:?\s*\n(.+?)(?=\n\s*Recomenda|\Z)", norm, re.S | re.I)
-    recom = re.search(r"Recomenda(?:ção|cao)\s*:\s*(.+)", norm, re.S | re.I)
+    pontos = re.search(r"Pontos principais\s*:?\s*\n(.+?)(?=\n\s*Recomenda|\Z)", norm,
+                       re.S | re.I)
+    recom = re.search(r"Recomenda(?:ção|cao)\s*:\s*(.+)", norm, re.I)  # só a própria linha
     categoria = escolher_orientacao(recom.group(1) if recom else None)
     oficial = RECOMENDACOES[categoria] if categoria else None
     lista = _linhas_com_marcador(pontos.group(1)) if pontos else []
     if resumo and lista:
-        return Boletim(resumo=" ".join(resumo.group(1).split()), pontos=lista[:5],
+        return Boletim(resumo=" ".join(resumo.group(1).split()), pontos=lista[:3],
                        recomendacao=oficial, categoria_recomendacao=categoria,
                        texto_bruto=texto, formato_ok=categoria is not None)
     # Fora do formato: aproveita o texto inteiro como resumo, mas sinaliza.
     corpo = re.split(r"\n\s*Recomenda", norm, flags=re.I)[0]
-    return Boletim(resumo=" ".join(corpo.split()), pontos=_linhas_com_marcador(corpo)[:5],
+    return Boletim(resumo=" ".join(corpo.split()), pontos=_linhas_com_marcador(corpo)[:3],
                    recomendacao=oficial, categoria_recomendacao=categoria,
                    texto_bruto=texto, formato_ok=False)
+
+
+def _sem_repetir(fatos: list[str]) -> list[str]:
+    vistos, unicos = set(), []
+    for fato in fatos:
+        chave = sem_acento(re.sub(r"\W+", " ", fato)).strip()
+        if chave and chave not in vistos:
+            vistos.add(chave)
+            unicos.append(fato)
+    return unicos
 
 
 def sumarizar(manchetes: list[str], gerar, recorte: str = "",
@@ -274,6 +298,19 @@ def sumarizar(manchetes: list[str], gerar, recorte: str = "",
                           MAX_TOKENS_FATOS)
             tokens, chamadas = tokens + saida["tokens_gerados"], chamadas + 1
             fatos += _linhas_com_marcador(saida["resultado"]) or [saida["resultado"].strip()]
+        fatos = _sem_repetir(fatos)
+        # Rodada 2: com 39 fatos de uma vez, o modelo copiava a lista inteira e não chegava
+        # à recomendação. Acima de MAX_FATOS_REDUCE, consolida em grupos (reduce em árvore).
+        while len(fatos) > MAX_FATOS_REDUCE:
+            grupos = [fatos[i:i + MAX_FATOS_REDUCE]
+                      for i in range(0, len(fatos), MAX_FATOS_REDUCE)]
+            novos = []
+            for grupo in grupos:
+                saida = gerar(PROMPT_CONSOLIDAR.format(
+                    recorte=recorte, fatos="\n".join(f"- {f}" for f in grupo)), MAX_TOKENS_FATOS)
+                tokens, chamadas = tokens + saida["tokens_gerados"], chamadas + 1
+                novos += _linhas_com_marcador(saida["resultado"])[:3] or grupo[:3]
+            fatos = _sem_repetir(novos)
         prompt = PROMPT_BOLETIM.format(  # etapa reduce
             tipo_entrada="fatos extraídos de notícias", recorte=recorte,
             conteudo="\n".join(f"- {f}" for f in fatos), orientacoes=ORIENTACOES)
@@ -289,6 +326,26 @@ def sumarizar(manchetes: list[str], gerar, recorte: str = "",
 _PALAVRAS_DE_FORMATO = {"resumo", "pontos", "principais", "recomendacao", "fato", "evite",
                         "use", "mantenha", "fique", "procure", "feche", "beba", "a", "o", "as",
                         "os", "em", "no", "na", "de", "da", "do"}
+
+
+def recomendacao_coerente(categoria: str | None, sentimento: dict | None) -> bool | None:
+    """Confere, por código, se a orientação escolhida combina com o tom das notícias.
+
+    Rodada 2: o modelo escolheu "Boa" para um mês com manchetes de poluição "acima do
+    péssimo". Orientação branda (Boa/Moderada) com maioria de notícias negativas, ou
+    orientação grave (Muito Ruim/Péssima) com poucas negativas, é marcada como incoerente.
+    """
+    if not categoria or not sentimento:
+        return None
+    classificadas = sum(v for k, v in sentimento.items() if k != "indefinido")
+    if not classificadas:
+        return None
+    negativas = sentimento.get("negativo", 0) / classificadas
+    if categoria in ("Boa", "Moderada"):
+        return negativas < 0.6
+    if categoria in ("Muito Ruim", "Péssima"):
+        return negativas >= 0.3
+    return True
 
 
 def verificar_fidelidade(texto: str, fontes: list[str]) -> dict:
@@ -374,6 +431,8 @@ def resumir_recorte(df: pd.DataFrame, gerar, local: str | None = None, mes: str 
         "estatisticas": estatisticas(selecao),
         "boletim": {"resumo": b.resumo, "pontos": b.pontos, "recomendacao": b.recomendacao,
                     "categoria_recomendacao": b.categoria_recomendacao,
+                    "recomendacao_coerente": recomendacao_coerente(
+                        b.categoria_recomendacao, estatisticas(selecao).get("sentimento")),
                     "formato_ok": b.formato_ok},
         # a recomendação é orientação geral de saúde, não fato noticiado: fica fora da checagem
         "fidelidade": verificar_fidelidade(" ".join([b.resumo, *b.pontos]), manchetes),

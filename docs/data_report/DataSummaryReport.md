@@ -147,7 +147,7 @@ LLM não está instalado.
 | Duplicidade de notícias | O mesmo título aparece em mais de um termo de busca | `drop_duplicates` por título |
 | Ruído textual | Nomes de veículos e *stopwords* dominam a nuvem | Lista de *stopwords* em português e remoção do sufixo da fonte |
 | Campo `resumo` das notícias | O feed do Google repete a manchete e junta o nome do veículo ou manchetes de outras notícias | A sumarização usa só a manchete |
-| Páginas que não são notícias | 48 itens do IQAir são páginas fixas "Qualidade do ar em <cidade>" | Removidos antes da sumarização (281 → 233 válidas) |
+| Páginas que não são notícias | 50 itens do IQAir são páginas fixas ("Qualidade do ar em <cidade>", "Índice de Qualidade do Ar (AQI) ... \| IQAir Brasil") | Removidos antes da sumarização (281 → 231 válidas) |
 | Concentração de fontes | Poucos veículos e poucas cidades respondem por boa parte das notícias (seção 5) | Os resumos e o dashboard mostram veículo e quantidade de notícias de cada recorte |
 | Estrutura HTML instável | Páginas podem mudar sem aviso | Extração genérica de `<table>`, validação e log de coleta com status |
 | Dados do usuário | Colunas, datas e valores podem vir errados | Validação com mensagens e descarte de linhas inválidas |

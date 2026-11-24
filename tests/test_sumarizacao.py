@@ -206,3 +206,69 @@ def test_rota_sumarizar_boletim_vazio_vira_502(api, monkeypatch):
     monkeypatch.setattr(api_main, "llm", LLMFalso(gerar=GeradorFalso(boletim="   ")))
     r = api.post("/sumarizar_noticias", json={"max_noticias": 5})
     assert r.status_code == 502 and r.json()["erro"] == "resposta_invalida_do_modelo"
+
+
+# ---------------------------------------------------------------- correções da rodada 2
+class GeradorFatosUnicos(GeradorFalso):
+    """Cada chamada devolve 3 fatos diferentes, como um modelo de verdade faria."""
+
+    def __call__(self, prompt, max_tokens):
+        self.prompts.append(prompt)
+        if "Escreva um boletim" in prompt:
+            texto = self.boletim
+        else:
+            n = len(self.prompts)
+            texto = "\n".join(f"- fato {n}.{i}" for i in range(3))
+        return {"resultado": texto, "tokens_gerados": 10, "tempo_s": 0.1}
+
+
+def test_muitos_fatos_sao_consolidados_antes_do_boletim():
+    """233 manchetes = 12 lotes = 36 fatos: consolida em grupos de 12 antes do boletim."""
+    gerar = GeradorFatosUnicos()
+    r = sz.sumarizar([f"manchete {i}" for i in range(233)], gerar)
+    consolidacoes = [p for p in gerar.prompts if p.startswith("Abaixo estão fatos") and
+                     "Junte esses fatos" in p]
+    assert r.n_lotes == 12 and len(consolidacoes) == 3          # 36 fatos -> 3 grupos
+    assert r.n_chamadas == 12 + 3 + 1
+    final = gerar.prompts[-1]
+    assert "Escreva um boletim" in final and final.count("\n- fato") <= sz.MAX_FATOS_REDUCE
+
+
+def test_fatos_repetidos_sao_removidos():
+    assert sz._sem_repetir(["Fumaça em Manaus.", "fumaça em manaus", "Aulas suspensas"]) == \
+        ["Fumaça em Manaus.", "Aulas suspensas"]
+
+
+def test_recomendacao_antes_dos_pontos_e_lista_longa_cortada():
+    b = sz.interpretar_boletim("Resumo: Ar péssimo.\nRecomendação: Péssima\nPontos principais:\n"
+                               "- a\n- b\n- c\n- d\n- e")
+    assert b.formato_ok and b.categoria_recomendacao == "Péssima" and b.pontos == ["a", "b", "c"]
+
+
+def test_orientacoes_no_prompt_nao_sao_numeradas():
+    """Rodada 2: orientações 1–5 ao lado de manchetes 1–12 confundiram o modelo."""
+    assert not any(linha[:2] in {"1.", "2.", "3.", "4.", "5."}
+                   for linha in sz.ORIENTACOES.splitlines())
+
+
+@pytest.mark.parametrize("categoria, sentimento, esperado", [
+    ("Boa", {"negativo": 10, "positivo": 2}, False),         # caso da rodada 2 (setembro)
+    ("Péssima", {"negativo": 10, "positivo": 2}, True),
+    ("Péssima", {"positivo": 9, "negativo": 1}, False),
+    ("Ruim", {"negativo": 5}, True),
+    ("Boa", None, None), (None, {"negativo": 3}, None),
+])
+def test_coerencia_da_recomendacao_com_o_sentimento(categoria, sentimento, esperado):
+    assert sz.recomendacao_coerente(categoria, sentimento) is esperado
+
+
+def test_preparo_remove_paginas_aqi_do_iqair():
+    df = pd.DataFrame([
+        {"titulo": "Índice de Qualidade do Ar (AQI) e informações sobre Poluição do Ar de India"
+                   " | IQAir Brasil", "fonte": "IQAir", "data_publicacao": "2026-10-01 10:00",
+         "link": None, "resumo": "", "termo_busca": "x", "coletado_em": "2026-10-19"},
+        {"titulo": "Como três grandes estudos mudaram o que sabemos sobre a poluição do ar",
+         "fonte": "IQAir", "data_publicacao": "2026-10-01 10:00", "link": None, "resumo": "",
+         "termo_busca": "x", "coletado_em": "2026-10-19"},
+    ])
+    assert sz.preparar_noticias(df)["titulo"].str.startswith("Como três").tolist() == [True]

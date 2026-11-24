@@ -16,7 +16,7 @@ tema): o que foi noticiado, quais os fatos principais e o que a população deve
 
 | Etapa | Por quê | Efeito no conjunto coletado em 19/10/2026 |
 |---|---|---|
-| Remover páginas de índice do IQAir ("Qualidade do ar em Campinas") | São páginas fixas de monitoramento que o feed traz como notícia; não relatam fatos. Títulos iguais vindos de veículos de notícia são mantidos | 281 → 233 notícias válidas (48 removidas) |
+| Remover páginas de índice do IQAir ("Qualidade do ar em Campinas", "Índice de Qualidade do Ar (AQI) ... \| IQAir Brasil") | São páginas fixas de monitoramento que o feed traz como notícia; não relatam fatos. Títulos iguais vindos de veículos de notícia são mantidos | 281 → 231 notícias válidas (50 removidas) |
 | Usar só a manchete como texto | O campo `resumo` do feed repete a manchete e acrescenta o nome do veículo ou manchetes de outras notícias | Entrada mais curta e sem ruído |
 | Detectar o local citado | Permite recortar por cidade | Manaus: 130; outros locais: 88; Santarém: 8; Porto Velho: 4 |
 | Extrair o mês | Permite recortar por período | outubro/2026: 203; setembro/2026: 12 |
@@ -28,7 +28,10 @@ resume em duas etapas:
 
 1. **Map:** as manchetes do recorte são divididas em lotes de até 20. Cada lote vira uma lista de
    3 fatos.
-2. **Reduce:** os fatos de todos os lotes viram um boletim com formato fixo: **Resumo** (duas
+2. **Consolidação:** se houver mais de 12 fatos, eles são agrupados de 12 em 12 e cada grupo é
+   reduzido aos 3 mais importantes, até sobrarem no máximo 12 (*reduce* em árvore). Fatos
+   repetidos são removidos em cada passo.
+3. **Reduce:** os fatos de todos os lotes viram um boletim com formato fixo: **Resumo** (duas
    frases), **Pontos principais** (três itens) e **Recomendação**. A recomendação não é escrita
    pelo modelo: ele escolhe qual das 5 orientações oficiais de saúde (uma por categoria do IQAr)
    combina com o noticiário, e o boletim traz o texto da norma (seção 7).
@@ -52,7 +55,7 @@ As lições das quatro rodadas de avaliação da TP4 orientaram os *prompts* da 
 | Pedido de exatamente 3 fatos por lote | Limita o tamanho da saída e força a escolha do que é mais importante |
 | "Cite o local e os números quando as manchetes trouxerem" | Resumos sem local e sem números são vagos e pouco acionáveis |
 | "Escreva o local exatamente como na manchete" e "repita a palavra que vem junto do número" | Rodada 1: o modelo trocou Amazonas por Manaus e transformou "964% na poluição" em "964% na qualidade do ar" |
-| Recomendação por **escolha fechada** entre as 5 orientações oficiais (responde só o número) | Rodada 1: o modelo recomendou "evite sair da cidade". Escolher numa lista, como na classificação de sentimento, é o que um modelo pequeno faz com mais acerto, e o texto final é o da norma |
+| Recomendação por **escolha fechada** entre as 5 orientações oficiais (responde o nome da categoria), pedida **antes** dos pontos | Rodada 1: o modelo recomendou "evite sair da cidade". Escolher numa lista, como na classificação de sentimento, é o que um modelo pequeno faz com mais acerto, e o texto final é o da norma |
 | Decodificação determinística (`do_sample=False`) | Mesma entrada, mesmo boletim: resultados reproduzíveis |
 
 Os *prompts* completos estão em `src/sumarizacao.py` (`PROMPT_FATOS` e `PROMPT_BOLETIM`).
@@ -61,7 +64,8 @@ Os *prompts* completos estão em `src/sumarizacao.py` (`PROMPT_FATOS` e `PROMPT_
 
 | Métrica | Como é calculada | Para que serve |
 |---|---|---|
-| `formato_ok` | o código encontrou Resumo, Pontos principais e uma orientação oficial válida (1 a 5) | mostra se o modelo seguiu as instruções |
+| `formato_ok` | o código encontrou Resumo, Pontos principais e uma orientação oficial válida | mostra se o modelo seguiu as instruções |
+| `recomendacao_coerente` | orientação branda (Boa/Moderada) com 60% ou mais de notícias negativas, ou grave (Muito Ruim/Péssima) com menos de 30%, é marcada como incoerente | confere a escolha do modelo com um dado calculado de outra forma (o sentimento) |
 | Fidelidade (`taxa`) | fração dos números, nomes próprios e locais conhecidos (capitais e estados, mesmo no início da frase) do boletim que aparecem nas manchetes de origem | aponta possíveis invenções (`nao_encontrados`) para conferir |
 | Taxa de compressão | palavras do boletim / palavras das manchetes | mede o quanto a leitura foi reduzida |
 | Revisão manual | leitura dos boletins ao lado das fontes | detecta erros que a checagem automática não pega (ex.: causa invertida) |
@@ -139,8 +143,34 @@ positivas e 6 neutras.
    frase. Reaplicada aos boletins da rodada 1, ela agora aponta "Manaus" no recorte "outros
    locais" (fidelidade de 100% para 75%).
 
-### Rodada 2 (a preencher)
+### Rodada 2 (23/11/2026)
 
 | Recorte | Notícias | Chamadas | Tempo (s) | `formato_ok` | Fidelidade | Orientação escolhida |
 |---|---|---|---|---|---|---|
-| | | | | | | |
+| Panorama geral | 233 | 13 | 163,4 | **não** | 100% | — |
+| Local: Manaus | 130 | 8 | 58,6 | sim | 100% | Péssima |
+| Local: outros locais | 88 | 6 | 65,3 | **não** | 83% ("Manaus") | — |
+| Mês: 09/2026 | 12 | 1 | 8,8 | sim | 100% | **Boa** |
+| Mês: 10/2026 | 203 | 12 | 118,2 | sim | 100% | Péssima |
+| Tema: qualidade do ar | 91 | 6 | 66,9 | sim | 100% | Péssima |
+| Tema: queimadas fumaça | 71 | 5 | 38,8 | sim | 100% | Ruim |
+| Tema: poluição do ar | 59 | 4 | 35,8 | sim | 100% | Péssima |
+| Tema: índice de qualidade do ar | 12 | 1 | 7,3 | sim | 100% | Péssima |
+
+**O que melhorou:** nenhuma recomendação inventada; a troca "poluição/qualidade do ar" não se
+repetiu; a checagem ampliada apontou "Manaus" no recorte de outros locais, onde nenhuma manchete
+cita a cidade.
+
+**Problemas novos e correções para a rodada 3:**
+
+| Problema | Causa | Correção |
+|---|---|---|
+| `formato_ok = false` nos dois maiores recortes | Com 12 ou 13 lotes, a etapa final recebia até 39 fatos; o modelo copiava a lista e esgotava o limite de tokens antes da recomendação | Consolidação em árvore (no máximo 12 fatos na etapa final), remoção de fatos repetidos e recomendação pedida **antes** dos pontos |
+| Orientação "Boa" para "poluição acima do péssimo" (setembro) | O *prompt* tinha manchetes numeradas de 1 a 12 e orientações numeradas de 1 a 5; o modelo confundiu as listas | Orientações sem número; o modelo responde o **nome** da categoria. Verificação de coerência com o sentimento: reaplicada à rodada 2, marca só esse caso |
+| Página "Índice de Qualidade do Ar (AQI) ... \| IQAir Brasil" virou ponto principal | O filtro só reconhecia "Qualidade do ar em X" | Filtro ampliado: 231 notícias válidas |
+
+### Rodada 3 (a preencher)
+
+| Recorte | Notícias | Chamadas | Tempo (s) | `formato_ok` | Fidelidade | Orientação | Coerente |
+|---|---|---|---|---|---|---|---|
+| | | | | | | | |
