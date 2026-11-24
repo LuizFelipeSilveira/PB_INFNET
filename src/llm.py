@@ -316,7 +316,15 @@ class LLMLocal:
         self.ultimo_erro = None
 
     def processar(self, tarefa: str, texto: str) -> dict:
+        """Executa uma das tarefas da rota /processar_texto (resumo, sentimento, pergunta)."""
         prompt, max_tokens = montar_prompt(tarefa, texto)
+        return self.gerar_texto(prompt, max_tokens)
+
+    def gerar_texto(self, prompt: str, max_tokens: int) -> dict:
+        """Gera texto para um prompt qualquer, com fila, limites de tempo e erros tratados.
+
+        Usado pelas tarefas acima e pela sumarização do noticiário (src/sumarizacao.py).
+        """
         # Espera a vez na fila por no máximo `espera_s`; depois desiste com LLMOcupado,
         # em vez de deixar o cliente esperando sem resposta.
         if not self._cadeado.acquire(timeout=self.espera_s):

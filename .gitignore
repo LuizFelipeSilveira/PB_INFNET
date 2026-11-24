@@ -19,6 +19,8 @@ Thumbs.db
 # Dados intermediários grandes (mantém a estrutura das pastas)
 data/processed/*
 !data/processed/.gitkeep
+# insights do noticiário (TP5): versionados para o dashboard funcionar sem o LLM
+!data/processed/insights/
 
 # Modelos de linguagem baixados localmente (TP4, alguns GB)
 modelos/

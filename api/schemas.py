@@ -195,3 +195,82 @@ class ErroAPI(BaseModel):
                                         description="Campos com problema (erros 422).")
     id_requisicao: str = Field(..., description="Também no cabeçalho X-Request-ID e no log do "
                                                 "servidor; informe-o ao relatar um problema.")
+
+
+# ---------------------------------------------------------------- sumarização (TP5)
+class PedidoSumarizacao(Pedido):
+    """Corpo de `POST /sumarizar_noticias`. Todos os filtros são opcionais."""
+
+    local: str | None = Field(None, examples=["Manaus"],
+                              description="Cidade citada (ver GET /noticias/recortes).")
+    mes: str | None = Field(None, pattern=r"^\d{4}-\d{2}$", examples=["2026-10"],
+                            description="Mês no formato AAAA-MM.")
+    tema: str | None = Field(None, examples=["queimadas fumaça"],
+                             description="Termo de busca que trouxe a notícia.")
+    max_noticias: int = Field(30, ge=3, le=60, description="Usa as N notícias mais recentes "
+                                                          "do recorte (mais notícias = mais lento).")
+
+
+class EstatisticasNoticias(BaseModel):
+    n_noticias: int = Field(..., ge=1)
+    periodo_inicio: date
+    periodo_fim: date
+    veiculos: dict[str, int] = Field(..., description="Até 5 veículos com mais notícias.")
+    locais: dict[str, int]
+    sentimento: dict[str, int] | None = Field(None, description="Contagem por rótulo, se o "
+                                                                "sentimento já foi calculado.")
+
+
+class BoletimNoticias(BaseModel):
+    resumo: str = Field(..., min_length=1)
+    pontos: list[str]
+    recomendacao: str | None = None
+    formato_ok: bool = Field(..., description="False se o modelo não seguiu o formato pedido.")
+
+
+class Fidelidade(BaseModel):
+    termos_verificados: int = Field(..., ge=0)
+    nao_encontrados: list[str] = Field(..., description="Números ou nomes do boletim que não "
+                                                        "aparecem nas manchetes: conferir.")
+    taxa: float = Field(..., ge=0, le=1)
+
+
+class FonteNoticia(BaseModel):
+    titulo: str
+    veiculo: str
+    data: date
+    link: str | None = None
+    sentimento: Rotulo | None = None
+
+
+class ProcessamentoSumarizacao(BaseModel):
+    n_lotes: int = Field(..., ge=1)
+    n_chamadas: int = Field(..., ge=1)
+    tokens_gerados: int = Field(..., ge=0)
+    tempo_s: float = Field(..., ge=0)
+    palavras_entrada: int = Field(..., ge=1)
+    palavras_saida: int = Field(..., ge=1)
+    modelo: str
+    formato: str
+    processado_em: datetime
+
+
+class RespostaSumarizacao(BaseModel):
+    """Resposta de `POST /sumarizar_noticias`."""
+
+    descricao: str = Field(..., examples=["em Manaus, em 10/2026"])
+    filtros: dict[str, str | int | None]
+    estatisticas: EstatisticasNoticias
+    boletim: BoletimNoticias
+    fidelidade: Fidelidade
+    fontes: list[FonteNoticia]
+    processamento: ProcessamentoSumarizacao
+
+
+class RecortesDisponiveis(BaseModel):
+    """Valores aceitos nos filtros de `POST /sumarizar_noticias`, com a contagem de notícias."""
+
+    total: int
+    locais: dict[str, int]
+    meses: dict[str, int]
+    temas: dict[str, int]

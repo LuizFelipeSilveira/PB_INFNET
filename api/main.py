@@ -29,6 +29,7 @@ from src import data_loader as dl  # noqa: E402
 from src.api import CIDADES  # noqa: E402
 from src.iqar import FONTE_LIMITES, RECOMENDACOES, calcular_indice, categoria  # noqa: E402
 
+from src import sumarizacao as sz  # noqa: E402
 from src.llm import LLMErro, LLMLocal, contexto_iqar, rotulo_sentimento  # noqa: E402
 
 from api import erros as tratamento  # noqa: E402
@@ -43,7 +44,10 @@ from api.schemas import (  # noqa: E402
     LeituraRegistrada,
     MetadadosLLM,
     NovaLeitura,
+    PedidoSumarizacao,
     PedidoTexto,
+    RecortesDisponiveis,
+    RespostaSumarizacao,
     RespostaProcessamento,
     ResultadoIQAr,
     StatusAPI,
@@ -300,3 +304,62 @@ def processar_texto(pedido: PedidoTexto) -> RespostaProcessamento:
                                tokens_gerados=saida["tokens_gerados"], tempo_s=saida["tempo_s"],
                                processado_em=datetime.now()),
     )
+
+
+# ---------------------------------------------------------------- sumarização (TP5)
+def _noticias():
+    try:
+        return sz.carregar_noticias()
+    except FileNotFoundError as erro:
+        raise ErroHTTP(503, "dados_indisponiveis", "As notícias ainda não foram coletadas.",
+                       "Rode `python scripts/scraping/scrape_noticias.py`.") from erro
+    except (pd.errors.ParserError, KeyError, ValueError) as erro:
+        raise ErroHTTP(500, "dados_corrompidos", f"Não foi possível ler as notícias ({erro}).",
+                       "Rode o scraper de notícias de novo.") from erro
+
+
+@app.get("/noticias/recortes", response_model=RecortesDisponiveis, tags=["sumarizacao"],
+         responses=erros(500, 503))
+def recortes_disponiveis() -> RecortesDisponiveis:
+    """GET — locais, meses e temas disponíveis para filtrar a sumarização."""
+    df = _noticias()
+    contar = lambda col: {str(k): int(v) for k, v in df[col].value_counts().items()}  # noqa: E731
+    return RecortesDisponiveis(total=len(df), locais=contar("local"),
+                               meses=dict(sorted(contar("mes").items())),
+                               temas=contar("termo_busca"))
+
+
+@app.post("/sumarizar_noticias", response_model=RespostaSumarizacao, tags=["sumarizacao"],
+          responses=erros(404, 422, 500, 502, 503, 504))
+def sumarizar_noticias(pedido: PedidoSumarizacao) -> RespostaSumarizacao:
+    """POST — resume as notícias coletadas de um recorte com o LLM **local**.
+
+    Filtra por `local`, `mes` e `tema` (todos opcionais), pega as `max_noticias` mais
+    recentes e resume em duas etapas (map-reduce): lotes de 20 manchetes viram listas de
+    fatos, e os fatos viram um boletim (resumo, pontos principais e recomendação).
+
+    Além do texto, a resposta traz o que foi calculado por código, e não pelo modelo:
+    estatísticas do recorte, a lista de fontes e a checagem de fidelidade (números e
+    nomes do boletim que não aparecem nas manchetes). Com 30 notícias, leva cerca de
+    um minuto na GPU de desenvolvimento.
+    """
+    df = _noticias()
+    try:
+        item = sz.resumir_recorte(df, llm.gerar_texto, pedido.local, pedido.mes, pedido.tema,
+                                  pedido.max_noticias)
+    except ValueError as erro:
+        raise ErroHTTP(404, "sem_noticias", "Nenhuma notícia corresponde a esse recorte.",
+                       "Veja os locais, meses e temas disponíveis em GET /noticias/recortes.") from erro
+    except LLMErro as erro:
+        raise erro_do_llm(erro) from erro
+    try:
+        return RespostaSumarizacao(
+            descricao=item["descricao"], filtros=item["filtros"],
+            estatisticas=item["estatisticas"], boletim=item["boletim"],
+            fidelidade=item["fidelidade"], fontes=item["fontes"],
+            processamento={**item["processamento"], "modelo": llm.repo, "formato": llm.formato,
+                           "processado_em": datetime.now()})
+    except ValidationError as erro:
+        raise ErroHTTP(502, "resposta_invalida_do_modelo",
+                       f"O boletim gerado ficou fora do formato esperado ({erro.errors()[0]['msg']}).",
+                       "Tente de novo ou use um recorte com mais notícias.") from erro

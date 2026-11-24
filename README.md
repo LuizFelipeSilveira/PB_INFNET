@@ -26,7 +26,8 @@ eter/
 │   ├── state.py                  #   sessão e cache compartilhados entre páginas
 │   ├── ui.py                     #   componentes visuais compartilhados
 │   ├── llm_prep.py               #   Modeling: consolida o corpus para os LLMs
-│   └── llm.py                    #   Modeling: carrega o LLM local e executa as tarefas (TP4)
+│   ├── llm.py                    #   Modeling: carrega o LLM local e executa as tarefas (TP4)
+│   └── sumarizacao.py            #   Modeling: sumarização do noticiário (map-reduce) (TP5)
 ├── scripts/
 │   ├── scraping/                 # Data Acquisition: coletores com Beautiful Soup (+ Selenium
 │   │   ├── scrape_iqar.py        #   para a página da CETESB — ver Charter §7)
@@ -34,7 +35,8 @@ eter/
 │   ├── prepare_corpus.py         # gera data/processed/corpus_llm.jsonl
 │   └── llm/                      # Modeling (TP4)
 │       ├── baixar_modelo.py      #   baixa o modelo do Hugging Face para modelos/
-│       └── avaliar_modelos.py    #   compara os candidatos (velocidade, memória, acerto)
+│       ├── avaliar_modelos.py    #   compara os candidatos (velocidade, memória, acerto)
+│       └── sumarizar_noticias.py #   sentimento + boletins por recorte -> data/processed/insights/
 ├── data/
 │   ├── raw/                      #   saídas dos scrapers (CSV/TXT)
 │   ├── processed/                #   corpus_llm.jsonl, leituras_api.csv (não versionados)
@@ -43,7 +45,9 @@ eter/
 ├── docs/
 │   ├── project/Charter.md        # Business Understanding
 │   ├── data_report/DataSummaryReport.md
-│   └── model/ModelSelection.md   # Modeling: escolha e justificativa do LLM local
+│   └── model/
+│       ├── ModelSelection.md     # Modeling: escolha e justificativa do LLM local
+│       └── Sumarizacao.md        # Modeling: sumarização do noticiário (TP5)
 ├── modelos/                      # pesos do LLM baixados localmente (não versionados)
 ├── tests/                        # pytest (rota /processar_texto com LLM falso)
 ├── .streamlit/                   # tema e segredos (exemplo)
@@ -109,6 +113,19 @@ curl -X POST http://127.0.0.1:8000/processar_texto -H "Content-Type: application
 ```
 
 No app, a aba **API & IA → LLM local** faz o mesmo com um formulário. Testes: `pytest -q`.
+
+### Sumarização do noticiário (TP5)
+
+O LLM local resume as notícias coletadas por recorte (local, mês, tema) em boletins com resumo,
+pontos principais e recomendação, com checagem automática de fidelidade às manchetes. Detalhes em
+`docs/model/Sumarizacao.md`.
+
+```bash
+python scripts/llm/sumarizar_noticias.py      # gera data/processed/insights/ (sentimento + boletins)
+```
+
+Sob demanda: `POST /sumarizar_noticias` (filtros `local`, `mes`, `tema`, `max_noticias`) e
+`GET /noticias/recortes` (valores aceitos nos filtros).
 
 ### Formato das respostas e dos erros
 

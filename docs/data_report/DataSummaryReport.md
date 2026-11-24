@@ -16,7 +16,7 @@ gerados por IA.
 | 6 | Usuário (app) | Upload de CSV na aplicação | mantido em `st.session_state`; download opcional | Por sessão |
 | 7 | Usuário/sistemas externos (API) | `POST /leituras` (FastAPI) | `data/processed/leituras_api.csv` (não versionado) | Sob demanda |
 | 8 | Corpus consolidado para LLM | Reaproveita as fontes 2 a 5 (`src/llm_prep.py`) | `data/processed/corpus_llm.jsonl` (não versionado) | Sob demanda |
-| 9 | Saídas do LLM local | Geradas pelo modelo Qwen3.5-0.8B (`src/llm.py`) | respostas da API; `data/processed/avaliacao_llm/` (avaliação, não versionado) | Sob demanda |
+| 9 | Saídas do LLM local | Geradas pelo modelo Qwen3.5-0.8B (`src/llm.py`, `src/sumarizacao.py`) | respostas da API; `data/processed/insights/` (sentimento e boletins, versionado); `data/processed/avaliacao_llm/` (avaliação, não versionado) | Sob demanda |
 
 ## 2. Integração e uso dos dados ao longo do projeto
 
@@ -31,7 +31,8 @@ o caminho de cada dado até o usuário.
 | Texto de referência (CETESB, Wikipédia) | Extração do texto visível, quebra em blocos de ~600 caracteres | Nuvem de palavras; documentos `referencia` do corpus | TP3 |
 | Medições do usuário (upload) | Validação de colunas, datas, poluentes e valores; cálculo do IQAr por linha | Página **Meus dados** (gráficos e download) | TP3 |
 | Leituras enviadas por API | Validação do corpo, normalização do poluente, cálculo do IQAr | `GET/POST /leituras` | TP3 |
-| Corpus para LLM | União padronizada das fontes acima, em JSON Lines | Base da sumarização do noticiário (TP5) | TP3 (preparação), TP5 (uso) |
+| Corpus para LLM | União padronizada das fontes acima, em JSON Lines | Referência de textos para LLM | TP3 |
+| Notícias enriquecidas e boletins | Remoção das páginas de índice do IQAir, local e mês detectados, sentimento por LLM, resumos *map-reduce* por recorte, checagem de fidelidade | `POST /sumarizar_noticias`, `GET /noticias/recortes`; dashboard final | TP5 |
 | Saídas do LLM | Validação por esquema (*response models*); rótulo de sentimento padronizado | Rota `POST /processar_texto`; aba **LLM local**; dashboard final (TP5) | TP4 |
 
 ### Do dado ao insight
@@ -108,7 +109,8 @@ Na saída, o app acrescenta `iqar` e `classificacao`.
 
 Um documento por linha, em JSON, com `id`, `tipo` (`noticia` | `faixa_oficial` | `referencia`),
 `texto`, `fonte`, `data`, `link` e `metadados` (campos extras conforme o tipo, ex.: `poluente` e
-`categoria` para `faixa_oficial`). É a base de textos da sumarização do noticiário (TP5).
+`categoria` para `faixa_oficial`). Reúne todos os textos do projeto num formato único para uso com LLMs. A sumarização da TP5
+lê as notícias direto do CSV, porque precisa das colunas de data, veículo e termo de busca.
 
 ### 3.7 Saídas do LLM (`POST /processar_texto`)
 
@@ -125,6 +127,16 @@ Gerada por `scripts/llm/avaliar_modelos.py`: `resumo.csv` (uma linha por modelo,
 tokens/s, memória e acertos) e `<modelo>.json` (cada *prompt*, resposta e acerto). Os resultados
 das quatro rodadas estão em `docs/model/ModelSelection.md`.
 
+### 3.9 Insights do noticiário (`data/processed/insights/`, TP5)
+
+Gerados por `scripts/llm/sumarizar_noticias.py` e versionados, para o dashboard funcionar onde o
+LLM não está instalado.
+
+| Arquivo | Conteúdo |
+|---|---|
+| `noticias_enriquecidas.csv` | notícias válidas (sem páginas de índice e duplicatas) com `mes`, `local` detectado e `sentimento` classificado pelo LLM |
+| `resumos.json` | um boletim por recorte padrão (geral, por local, por mês, por tema): resumo, pontos principais, recomendação, `formato_ok`, fidelidade, estatísticas, processamento e lista de fontes |
+
 ## 4. Qualidade dos dados
 
 | Aspecto | Observação | Tratamento |
@@ -134,7 +146,8 @@ das quatro rodadas estão em `docs/model/ModelSelection.md`.
 | Norma vigente | A CONAMA 506/2024 mudou faixas de MP10, MP2.5 e SO2 | Tabela extraída do documento oficial e validada; teste com o exemplo resolvido da norma |
 | Duplicidade de notícias | O mesmo título aparece em mais de um termo de busca | `drop_duplicates` por título |
 | Ruído textual | Nomes de veículos e *stopwords* dominam a nuvem | Lista de *stopwords* em português e remoção do sufixo da fonte |
-| Campo `resumo` das notícias | O feed do Google junta a manchete com manchetes de outros veículos sobre o mesmo assunto | Limpeza antes da sumarização (TP5) |
+| Campo `resumo` das notícias | O feed do Google repete a manchete e junta o nome do veículo ou manchetes de outras notícias | A sumarização usa só a manchete |
+| Páginas que não são notícias | 48 itens do IQAir são páginas fixas "Qualidade do ar em <cidade>" | Removidos antes da sumarização (281 → 233 válidas) |
 | Concentração de fontes | Poucos veículos e poucas cidades respondem por boa parte das notícias (seção 5) | Os resumos e o dashboard mostram veículo e quantidade de notícias de cada recorte |
 | Estrutura HTML instável | Páginas podem mudar sem aviso | Extração genérica de `<table>`, validação e log de coleta com status |
 | Dados do usuário | Colunas, datas e valores podem vir errados | Validação com mensagens e descarte de linhas inválidas |
